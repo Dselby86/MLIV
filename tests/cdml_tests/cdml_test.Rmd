@@ -1,0 +1,124 @@
+---
+title: "Untitled"
+output: html_document
+date: "2024-01-25"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library( here )
+
+# Source function to generate file paths
+source( here::here( "R/configs.R" ) )
+
+# Load packages
+source( here::here( "R/packages.R" ) )
+
+# Load helper functions           
+source( here::here( "R/functions.R" ) )
+
+```
+
+```{r}
+load("/data/share/cdi/MLIV/Data/Simulated/Sim_Run_2024-01-08_ca/ca_50_1_CDML.RData")
+```
+
+```{r}
+df = ca_50_1_CDML
+```
+
+```{r}
+cdml = df %>%
+  select(metric, id, CDML, queen)
+```
+
+
+```{r eval=FALSE, include=FALSE}
+# Filter the dataframe to include only rows where metric is "bias"
+cdml_bias <- cdml %>%
+  filter(metric == "bias")
+
+# Create the histogram
+ggplot(cdml_bias, aes(x = id)) +
+  geom_bar() +
+  facet_wrap(~ queen) +
+  labs(x = "ID", y = "Frequency", title = "Histogram of CDML for Bias Metric Faceted by Queen")
+```
+
+```{r}
+# Turn off scientific notation
+options( scipen = 999 )
+```
+
+
+```{r}
+# Filter the dataframe to include only rows where metric is "bias"
+cdml_bias <- cdml %>%
+  filter(metric == "bias")
+
+cdml_bias_queen <- cdml_bias %>%
+  filter(queen == "RF MOM DR")
+
+# Create the ggplot object
+p <- ggplot(cdml_bias_queen, aes(x = id, y = CDML)) +
+  geom_bar(stat = "identity") +
+  labs(x = "ID", y = "CDML Value", title = "Histogram of CDML for Bias Metric Faceted by Queen") +
+  theme_minimal()
+
+# Convert ggplot object to plotly object
+ggplotly(p)
+```
+```{r}
+summary(cdml_bias_queen$CDML)
+```
+
+```{r}
+# Calculate the first and third quartiles of CDML
+first_quartile <- quantile(cdml_bias_queen$CDML, probs = 0.25)
+third_quartile <- quantile(cdml_bias_queen$CDML, probs = 0.75)
+
+# Filter the dataframe
+filtered_cdml_bias_queen <- cdml_bias_queen %>%
+  filter(CDML < first_quartile | CDML > third_quartile)
+
+# Display the resulting table
+filtered_cdml_bias_queen
+```
+
+```{r}
+
+# Filter the dataframe
+filtered_cdml_bias_queen <- cdml_bias_queen %>%
+  filter(CDML < -500 | CDML > 500)
+
+# Display the resulting table
+filtered_cdml_bias_queen
+```
+
+
+```{r}
+# Create the ggplot object with histogram
+bins <- 100  # Adjust the number of bins as needed
+
+p <- ggplot(cdml_bias_queen, aes(x = CDML, fill = cut(CDML, bins))) +
+  geom_histogram() +
+  labs(x = "CDML Value", y = "Count", title = "Histogram of CDML for Bias Metric Faceted by Queen") +
+  theme_minimal()
+
+# Convert ggplot object to plotly object
+ggplotly(p)
+```
+```{r}
+# Create the ggplot object with histogram
+p <- ggplot(cdml_bias_queen, aes(x = id, y = CDML, fill = CDML)) +
+  geom_bar(stat = "identity") +
+  labs(x = "ID", y = "CDML Value", title = "Histogram of CDML for Bias Metric Faceted by Queen") +
+  theme_minimal()
+
+# Convert ggplot object to plotly object
+ggplotly(p)
+```
+
