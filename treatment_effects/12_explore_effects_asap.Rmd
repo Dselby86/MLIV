@@ -1,0 +1,318 @@
+---
+title: "12 - expore effects - ASAP"
+author: "Selby"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 1
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library(here)
+
+# Styler
+library(styler)
+library(lintr)
+
+# Load previous programs
+source(here::here("R/packages.R"))
+```
+
+# Load Data from Previous File
+
+```{r}
+source(here::here("treatment_effects/11-Calculate CATES_asap.R"))
+
+```
+
+# Review Files
+
+```{r}
+cat("Continuous outcome Variable - ", y_cont, "\n")
+cat("Binary outcome Variable - ", y_binary, "\n")
+cat("Treatment Variable - ", treatment, "\n")
+cat("Covariates - ", cv, "\n")
+
+dat <- dat_asap
+```
+
+# Step 1: Establish Heterogeneity
+
+## Calculate Rank & Z-score for each outcome
+```{r}
+sd_cont <- sd(dat$cate_cont, na.rm = TRUE)
+mean_cont <- mean(dat$cate_cont, na.rm = TRUE)
+
+sd_binary <- sd(dat$cate_binary, na.rm = TRUE)
+mean_binary <- mean(dat$cate_binary, na.rm = TRUE)
+
+dat <- dat %>%
+  mutate(cate_cont_z = (cate_cont - mean_cont)/sd_cont,
+         cate_cont_rank =rank(cate_cont),
+         cate_binary_z = (cate_binary - mean_binary)/sd_binary,
+         cate_binary_rank =rank(cate_binary))
+```
+## Test for Heterogenity {.tabset}
+
+
+
+1. Regress CATE against rank/Z-score
+2. Plot Cate and rank/Z-score
+
+
+### Binary Variable
+
+#### Rank
+```{r}
+bin_fit <- lm(cate_binary ~ cate_binary_rank, data = dat)
+summary(bin_fit)
+
+dat %>%
+  ggplot(aes(x = cate_binary_rank, y = cate_binary) ) +
+  geom_point() +
+  geom_smooth(method = "lm", se = TRUE)
+```
+
+#### Z-Score
+```{r}
+bin_fit <- lm(cate_binary ~ cate_binary_z, data = dat)
+fit_sum <- summary(bin_fit)
+
+f <- 3
+fit_sum$coefficients <- round(fit_sum$coefficients, f)
+fit_sum$residuals <- round(fit_sum$residuals, f)
+fit_sum$cov.unscaled <- round(fit_sum$cov.unscaled, f)
+
+dat %>%
+  ggplot(aes(x = cate_binary_z, y = cate_binary) ) +
+  geom_point() +
+  geom_smooth(method = "lm", se = TRUE)
+```
+
+### Continuous Variable
+
+#### Rank
+```{r}
+cont_fit <- lm(cate_cont ~ cate_cont_rank, data = dat)
+summary(cont_fit)
+
+dat %>%
+  ggplot(aes(x = cate_cont_rank, y = cate_cont) ) +
+  geom_point() +
+  geom_smooth(method = "lm", se = TRUE)
+```
+
+#### Z-Score
+```{r}
+cont_fit <- lm(cate_cont ~ cate_cont_z, data = dat)
+fit_sum <- summary(cont_fit)
+
+
+fit_sum$coefficients <- round(fit_sum$coefficients, f)
+fit_sum$residuals <- round(fit_sum$residuals, f)
+fit_sum$cov.unscaled <- round(fit_sum$cov.unscaled, f)
+
+dat %>%
+  ggplot(aes(x = cate_cont_z, y = cate_cont) ) +
+  geom_point() +
+  geom_smooth(method = "lm", se = TRUE)
+```
+
+# Step 2: Best Linear Predictor {.tabset}
+
+## Binary
+
+### Fit Random Forest on CATES
+```{r}
+
+n_var = 10 #number of Important Variables
+
+#Set Formula
+x_vars <- stringr::str_c(cv, collapse = "+")
+formula <- paste0("cate_binary~", x_vars)
+formula <- as.formula(formula)
+
+# Randomforest for variable importance
+rf_model <- randomForest(formula, data=dat, importance=TRUE, ntree=500)
+
+#Variable Importance plot
+# Shows 10 most important variables
+varImpPlot(rf_model, n.var = n_var)
+
+# Find most important variables
+importance <- rf_model %>% 
+  importance() %>%
+  data.frame() %>% 
+  arrange(desc(X.IncMSE))
+
+# Selects top n_var
+top_variables <- importance %>% 
+  top_n(n_var, X.IncMSE)
+top_variables_names <- rownames(top_variables)
+# 
+# # create Dataframe with top variables
+# top_vars_df <- top_variables_names %>%
+#   data.frame() %>%
+#   mutate(var_type = case_when(
+#     TRUE ~ "continuous",
+#     str_detect(`.`, "_99") ~ "missing",
+#     str_detect(`.`, "_\\d+$") ~ "categorical"
+#     )
+#   )
+# 
+# colnames(top_vars_df)[1] <- "variable"
+# 
+# # Output Variable importance table
+# cap_text <- paste("Top", n_var, "Most important variables for predicting CATE on", y_binary, sep = " ")
+# 
+# top_vars_df %>% 
+#     knitr::kable(caption = cap_text)
+```
+
+### Regress CATE on Best Predictors
+```{r}
+x_vars <- stringr::str_c(top_variables_names, collapse = "+")
+formula <- paste0("cate_binary~", x_vars)
+formula <- as.formula(formula)
+
+lm_fit_b <- lm(formula, data = dat)
+summary(lm_fit_b)
+
+```
+
+## Continuous
+
+### Fit Random Forest on CATES
+```{r}
+
+n_var = 10 #number of Important Variables
+
+#Set Formula
+x_vars <- stringr::str_c(cv, collapse = "+")
+formula <- paste0("cate_cont~", x_vars)
+formula <- as.formula(formula)
+
+# Randomforest for variable importance
+rf_model <- randomForest(formula, data=dat, importance=TRUE, ntree=500)
+
+#Variable Importance plot
+# Shows 10 most important variables
+varImpPlot(rf_model, n.var = n_var)
+
+# Find most important variables
+importance <- rf_model %>% 
+  importance() %>%
+  data.frame() %>% 
+  arrange(desc(X.IncMSE))
+
+# Selects top n_var
+top_variables <- importance %>% 
+  top_n(n_var, X.IncMSE)
+top_variables_names <- rownames(top_variables)
+# 
+# # create Dataframe with top variables
+# top_vars_df <- top_variables_names %>%
+#   data.frame() %>%
+#   mutate(var_type = case_when(
+#     TRUE ~ "continuous",
+#     str_detect(`.`, "_99") ~ "missing",
+#     str_detect(`.`, "_\\d+$") ~ "categorical"
+#     )
+#   )
+# 
+# colnames(top_vars_df)[1] <- "variable"
+# 
+# # Output Variable importance table
+# cap_text <- paste("Top", n_var, "Most important variables for predicting CATE on", y_cont, sep = " ")
+# 
+# top_vars_df %>% 
+#     knitr::kable(caption = cap_text)
+```
+
+### Regress CATE on Best Predictors
+```{r}
+x_vars <- stringr::str_c(top_variables_names, collapse = "+")
+formula <- paste0("cate_cont~", x_vars)
+formula <- as.formula(formula)
+
+lm_fit_c <- lm(formula, data = dat)
+summary(lm_fit_c)
+
+```
+
+# Step 3: Quantile Personas
+
+## Identify CATE Quantiles
+
+```{r}
+quant_binary <- quantile(dat$cate_binary, probs = seq(0, 1, 0.25))
+quant_cont <- quantile(dat$cate_cont, probs = seq(0, 1, 0.25))
+
+dat <- dat %>%
+  mutate(quant_b = cut(cate_binary, breaks = quant_binary, labels = FALSE, include.lowest = TRUE),
+         quant_c = cut(cate_cont, breaks = quant_cont, labels = FALSE, include.lowest = TRUE))
+
+```
+
+## Demographic Variables
+```{r}
+gender <- "BLFEMALE"
+age <- "BLAGENUM"
+employed <- "BLWORK"
+parent <- "BLCHLD"
+```
+
+## Personal Tables{.tabset}
+
+### Binary
+
+```{r}
+tab_binary <- dat %>%
+  group_by(quant_b) %>%
+  summarize(BLFEMALE = mean(BLFEMALE, na.rm = TRUE),
+            BLAGENUM = mean(BLAGENUM, na.rm = TRUE),
+            BLWORK = mean(BLWORK, na.rm = TRUE),
+            BLCHLD = mean(!!sym(parent), na.rm = TRUE)
+            )
+
+overall_b  <- dat %>%
+  summarize(
+    quant_b = "Overall",
+    BLFEMALE = mean(BLFEMALE, na.rm = TRUE),
+    BLAGENUM = mean(BLAGENUM, na.rm = TRUE),
+    BLWORK = mean(BLWORK, na.rm = TRUE),
+    BLCHLD = mean(!!sym(parent), na.rm = TRUE)
+    )
+
+tab_binary <- rbind(overall_b, tab_binary)
+knitr::kable(tab_binary)
+```
+
+
+### Continuous
+
+```{r}
+tab_cont <- dat %>%
+  group_by(quant_c) %>%
+  summarize(BLFEMALE = mean(BLFEMALE, na.rm = TRUE),
+            BLAGENUM = mean(BLAGENUM, na.rm = TRUE),
+            BLWORK = mean(BLWORK, na.rm = TRUE),
+            BLCHLD = mean(!!sym(parent), na.rm = TRUE)
+            )
+
+overall_c  <- dat %>%
+  summarize(
+    quant_c = "Overall",
+    BLFEMALE = mean(BLFEMALE, na.rm = TRUE),
+    BLAGENUM = mean(BLAGENUM, na.rm = TRUE),
+    BLWORK = mean(BLWORK, na.rm = TRUE),
+    BLCHLD = mean(!!sym(parent), na.rm = TRUE)
+    )
+
+tab_cont <- rbind(overall_c, tab_cont)
+knitr::kable(tab_cont)
+```
+

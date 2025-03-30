@@ -1,0 +1,438 @@
+---
+title: "Untitled"
+author: "David Selby"
+date: "2024-04-02"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(here)
+library(tidyverse)
+library(rlang)
+library(ggExtra)
+library(kableExtra)
+library(knitr)
+
+# Styler
+library(styler)
+library(lintr)
+
+# Load previous programs
+source(here::here("R/setup.R"))
+source(here::here("simulation/00_add_treatment_effects.R"))
+source(here::here("methods/cf_model.R"))
+source(here::here("ASAP/01_load_real_ASAP.R"))
+source(here::here("CA/01_load_real_CA.R"))
+source(here::here("treatment_effects/treatment_effects_scripts/setup_te.R"))
+
+
+```
+
+```{r data prep}
+## CA
+dat <- ca_subset_imputed
+
+# Assign names of Covariates
+co_vars <- ca_covariates
+outcome_vars <- ca_outcomes
+treatment_vars <- ca_treatment
+te_vars <- paste0("te_", outcome_vars)
+## ASAP
+
+# dat <- asap_subset_imputed
+#
+# # Assign names of Covariates
+# co_vars <- asap_covariates
+# outcome_vars <- asap_outcomes
+# treatment_vars <- asap_treatment
+
+# Complete Cases for outcomes
+dat <- dat %>% filter(complete.cases(.))
+
+# Seperate data frame into covariates, outcomes, and treatment variables
+
+x_tr <- dat %>%
+  select(all_of(co_vars))
+
+# Convert all factor variables in covariate data frame to dummy variables
+x_tr <- dummy_cols(x_tr, remove_selected_columns = TRUE) %>% as.matrix()
+
+y_tr <- dat %>%
+  select(all_of(outcome_vars))  %>%
+  as.matrix
+
+d_tr <- dat %>%
+  select(all_of(treatment_vars)) %>%
+  as.matrix
+
+# NOTE THIS treats the training set the same as the test data set. May need to update with different subset
+x_val <- x_tr 
+
+ntrain <- nrow(x_tr)
+
+dat_te <- dat
+
+```
+
+## Causal Forest
+
+# Calculate Treatment effects
+```{r}
+
+#Specify ml_method in this case cf_model for causal forest
+
+te_cf <- calculate_te( x_tr, y_tr, d_tr, x_val, ntrain, ml_method = cf_model)
+
+#combine data frame with treatment effects
+
+dat_te <- cbind(dat_te, te_cf)
+
+```
+
+
+# Regression on Outcome
+
+```{r}
+# This code runs a regression each of the outcome variables of the treatment and specified covariates.
+
+#create empty list
+reg_model <- list()
+
+# String vector of outomes names
+outcomes_names <- colnames(y_tr)
+
+#combine treatment and covariate
+temp_dat <- cbind(d_tr, x_tr) %>% 
+  data.frame()
+
+# Fit lm for each outcome variable
+for (i in 1:ncol(y_tr)){
+  lm_fit <- lm(y_tr[, i] ~ . , data = temp_dat )
+  reg_model[[i]] <- summary(lm_fit)
+}
+
+#Rename list model variables
+reg_model <- setNames(reg_model, outcomes_names)
+
+#Check reg_model results
+reg_model$Y18JBERNA_06
+```
+
+# Extra Regression Results
+```{r}
+#For Paramaterization later
+j = 1 # Which Dependent variable
+
+lm_model <- reg_model[[j]]
+lm_ate <- lm_model$coefficients[treatment_vars,]
+
+# Reformat treatment effects variable to data frame and snake case
+lm_ate <- lm_ate %>%
+  data.frame() %>%
+  t() %>%
+  data.frame()
+
+colnames(lm_ate) <- colnames(lm_ate) %>% snakecase::to_snake_case()
+
+# Add Confidence interval and Signficnance at 95%
+lm_ate <- lm_ate %>%
+  mutate(
+    lower_ci = estimate - (std_error * 1.96),
+    upper_ci = estimate + (std_error * 1.96),
+    significant = ifelse(pr_t <= 0.05, 1, 0)
+  )
+
+# ate for plots and graphs:
+lm_mean <- lm_ate$estimate
+lm_lower_ci <- lm_ate$lower_ci
+lm_upper_ci <- lm_ate$upper_ci
+
+
+```
+
+
+# Variable Importance
+
+```{r}
+# @TODO - Check instability in outcome variables.
+# Construct variable importance plots and tables for each treatment effect variable
+
+#For Paramaterization later
+i = 1 # Which Variable
+n_var = 10 #number of Important Variables
+
+# Set tau - treatment effects
+tau <- te_cf[,i]
+
+# Randomforest for variable importance
+rf_model <- randomForest(tau ~ ., data=x_tr, importance=TRUE, ntree=500)
+
+#Variable Importance plot
+# Shows 10 most important variables
+varImpPlot(rf_model, n.var = n_var)
+
+# Find most important variables
+importance <- rf_model %>% 
+  importance() %>%
+  data.frame() %>% 
+  arrange(desc(X.IncMSE))
+
+# Selects top n_var
+top_variables <- importance %>% 
+  top_n(n_var, X.IncMSE)
+top_variables_names <- rownames(top_variables)
+
+# create Dataframe with top variables
+top_vars_df <- top_variables_names %>%
+  data.frame() %>%
+  mutate(var_type = case_when(
+    str_detect(`.`, "_99") ~ "missing",
+    str_detect(`.`, "_\\d+$") ~ "categorical",
+    TRUE ~ "continuous")
+  )
+
+colnames(top_vars_df)[i] <- "variable"
+
+# Output Variable importance table
+cap_text <- paste("Top", n_var, "Most important variables for predicting IATE on", outcomes_names[i], sep = " ")
+
+top_vars_df %>% 
+    knitr::kable(caption = cap_text)
+
+#Run x times.  Save dataframe.
+```
+
+# Dynamic Model IATE for  `r outcomes_names[i]` on top `r n_var` most important variables
+
+```{r}
+# The dynamic mode will regress the 10 most important variables from the random forest variable importance onto the treatment effects variable.
+
+# Sets up data for dynamic model
+temp_x <- x_tr[, top_variables_names] %>%
+  data.frame()
+
+# fit dynamic model using lm
+dynamic_model <- lm(tau ~ ., data = temp_x)
+
+#Return results of dynamic model.
+summary(dynamic_model)
+
+
+```
+# Covariate Drill down
+
+## Binary Covariate
+```{r}
+# Function for checking if continous variable is binary
+is_binary <- function(x) {
+  unique_values <- unique(x)
+  all(unique_values %in% c(0, 1)) && length(unique_values) <= 2
+}
+
+# Select only Continuous variables
+continuous_var <- top_vars_df %>% 
+  filter(var_type == "continuous")
+
+
+#Filter temp table to just continous variables
+#used for checking if columns contain binary variables
+binary_var_check <- temp_x %>%
+  mutate_all(as.numeric) %>%
+  select(all_of(continuous_var[,1]))
+
+# For loop to check each variable in binary_var_check
+# And convert them to binary in continuous_var
+for( i in 1:ncol(binary_var_check)){
+  col <- colnames(binary_var_check)[i]
+  if(is_binary(binary_var_check[,col])){
+    continuous_var$var_type[i] <- "binary"
+  }
+}
+
+# Combine continuous_var with top_vars_df
+# Binary Variables updated
+top_vars_df[top_vars_df$var_type == "continuous",] <- continuous_var
+
+
+
+```
+
+
+# Binary Covariate Plot
+
+```{r}
+
+# Select binary Variables
+binary_var <- top_vars_df %>% 
+  filter(var_type == "binary")
+
+#For Paramaterization later
+i = 1
+
+#Selected 1 variable
+x_var <- binary_var[i,1]
+
+# Create Temp Data
+temp_dat <- cbind(tau, temp_x)
+
+#Histogram
+temp_dat %>%
+  mutate(group := factor(!!sym(x_var))) %>%
+  ggplot(aes(x = tau, fill = group)) + 
+  geom_histogram(colour = "grey40", alpha = 0.5, position = "identity") +
+  geom_vline(xintercept = mean(tau), color = "black", linetype = "solid", size = 1) +
+  geom_vline(xintercept = lm_mean, color = "firebrick", linetype = "longdash", size = 1) +
+  geom_vline(xintercept = lm_lower_ci, color = "firebrick2", linetype = "dotted", size = 1) +
+  geom_vline(xintercept = lm_upper_ci, color = "firebrick2", linetype = "dotted", size = 1) +
+  geom_vline(xintercept = 0, color = "gray10", size = .5) +
+  geom_hline(yintercept = 0, color = "gray10", size = .5)
+```
+
+## Binary Table
+```{r}
+tab_binary <- temp_dat %>%
+  group_by(!!sym(x_var)) %>%
+  summarize(mean_te = mean(tau),
+            sd_te = sd(tau))
+
+var_name <- colnames(tab_binary)[1]
+
+tab_binary <- tab_binary %>%
+  mutate(!!sym(x_var) := paste(var_name, !!sym(x_var), sep = "_"))
+
+colnames(tab_binary)[1] <- "Group"
+
+tab_overall <- data.frame(
+  Group = "Tau", 
+  mean_te = mean(tau), 
+  sd_te = sd(tau))
+
+tab_lm <-data.frame(
+  Group = "linear model",
+  mean_te = lm_ate$estimate,
+  sd_te = lm_ate$std_error
+)
+
+tab <- rbind(tab_overall,
+             tab_lm,
+             tab_binary)
+
+tab %>%
+  kable("html") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+             
+```
+
+## Continuous Covariate
+
+```{r}
+#For Paramaterization later
+i = 1 # Which Variable
+
+continuous_var <- top_vars_df %>% 
+  filter(var_type == "continuous")
+
+x_var <- continuous_var[i,1]
+
+temp_dat <- cbind(tau, temp_x) %>%
+  mutate_all(as.numeric)
+
+# Plot continuous Variable
+p <- temp_dat %>%
+  ggplot(aes(y = tau, x = (!!sym(x_var)))) +
+  # Add the scatter plot points
+  geom_point() + 
+  # Add a linear model line with a 95% confidence interval 
+  geom_smooth(method = "lm", level = 0.95) + 
+  # Set x-axis limits based on min and max of x variable 
+  scale_x_continuous(limits = c(min(temp_dat[x_var], na.rm = TRUE), max(temp_dat[x_var], na.rm = TRUE))) 
+
+  
+ggExtra::ggMarginal(p, type = "histogram")
+```
+
+
+
+
+# Catagorical Covariate
+
+## Factor to Condence Dummies
+```{r}
+# Create a function to condense dummy variables
+condense_dummies <- function(df, prefix) {
+  df = dat_con
+  prefix = paste0(org_name, "_")
+  # Create an empty vector to store the results
+  result <- vector("numeric", nrow(df))
+  # Iterate over each row
+  for (i in 1:nrow(df)) {
+    # Find which dummy variable is 1 and assign the corresponding value
+    for (j in 1:length(prefix)) {
+      if (df[i, paste0(prefix, j)] == 1) {
+        result[i] <- j
+        break
+      }
+    }
+  }
+  
+  # Return the result as a factor
+  return(factor(result))
+}
+
+```
+
+```{r}
+categorical_var <- top_vars_df %>% 
+  filter(var_type == "categorical")
+
+#For Parameterization, Later
+i = i
+var_name <-categorical_var[i, 1]
+
+#First we need to get the rest of the categorical variable from the main dataset
+org_name <- str_replace(var_name, "_\\d+$", "")
+
+#Condensed table for dummy variables
+#Look up Variable from original dataset
+dat_con <- dat %>%
+  data.frame %>%
+  select(contains(org_name))
+
+dat_con <- cbind(tau, dat_con)
+
+#Histogram
+dat_con %>%
+  mutate(group := factor(!!sym(org_name))) %>%
+  ggplot(aes(x = tau, fill = group)) + 
+  geom_histogram(colour = "grey40", alpha = 0.25, position = "identity") +
+  geom_vline(xintercept = mean(tau), color = "black", linetype = "solid", size = 1) +
+  geom_vline(xintercept = lm_mean, color = "firebrick", linetype = "longdash", size = 1) +
+  geom_vline(xintercept = lm_lower_ci, color = "firebrick2", linetype = "dotted", size = 1) +
+  geom_vline(xintercept = lm_upper_ci, color = "firebrick2", linetype = "dotted", size = 1) +
+  geom_vline(xintercept = 0, color = "gray10", size = .5) +
+  geom_hline(yintercept = 0, color = "gray10", size = .5) +
+  scale_alpha_manual(values = c(var_name = 1)) + 
+  theme_minimal() +
+  guides(alpha = FALSE) #remove Alpha Legend
+
+#boxplot
+dat_con %>%
+  mutate(group := factor(!!sym(org_name))) %>%
+  ggplot(aes(x = tau, fill = group)) + 
+  geom_boxplot(colour = "grey40", alpha = 0.25) +
+  geom_vline(xintercept = mean(tau), color = "black", linetype = "solid", size = 1) +
+  geom_vline(xintercept = lm_mean, color = "firebrick", linetype = "longdash", size = 1) +
+  geom_vline(xintercept = lm_lower_ci, color = "firebrick2", linetype = "dotted", size = 1) +
+  geom_vline(xintercept = lm_upper_ci, color = "firebrick2", linetype = "dotted", size = 1) +
+  geom_vline(xintercept = 0, color = "gray10", size = .5) +
+  geom_hline(yintercept = 0, color = "gray10", size = .5) +
+  theme_minimal()
+  
+
+```
+
+@TODO: Need to add multiple IATE methods. Currently only Causal Forest.
+\newline
+@TODO: Need to add comparison between algorithims

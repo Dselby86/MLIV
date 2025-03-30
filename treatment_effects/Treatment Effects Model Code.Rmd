@@ -1,0 +1,396 @@
+---
+title: "Untitled"
+author: "David Selby"
+date: "2024-04-02"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+library(here)
+library(tidyverse)
+
+# Styler
+library(styler)
+library(lintr)
+
+# Load previous programs
+source(here::here("R/packages.R"))
+source(here::here("R/configs.R"))
+source(here::here("R/00_add_treatment_effects.R"))
+source(here::here("methods/04_MLIV_models.R"))
+source(here::here("ASAP/01_load_real_ASAP.R"))
+source(here::here("CA/01_load_real_CA.R"))
+```
+# Learners {.tabset}
+
+## XGBOOST S-LEARNER
+ \
+ xgboost_s_alg: Implementation of XGBOOST S-Learner \
+ \
+ Implemented using the \code{\link{xnie/rlearner}} package \
+ \
+ @description S-learner treats the treatment variable as if it was just another covariate 
+ like those in the vector x_tr. Instead of having two models for the response as a function 
+ of the covariates x_tr, the S-learner has a single model for the response as a function of x_tr 
+ and the treatment d_tr. But d_tr has interactions with the covariates. This is achieved by
+ augmenting the covariates matrix with interaction terms, specifically by adjusting the 
+ treatment variable to center it around 0 and then multiplying it element-wise 
+ with the original covariates. These interactions enable the model to capture how the 
+ effects of certain covariates may vary based on the treatment received.
+ XGBoost, or eXtreme Gradient Boosting, is a model that uses a technique called gradient 
+ boosting to build an ensemble of decision trees for both regression and classification tasks. \
+ \
+ @param x_tr Matrix of training covariates (N x X matrix)     \
+ @param y_tr Vector of outcome values                         \
+ @param d_tr Vector of treatment indicators in training data  \
+ @param x_val Matrix of validation covariates (N x X matrix)  \
+ @import xnie/rlearner                                        \
+\
+ @return Returns predicted IATEs of the validation sample     \
+\
+ @export                                                      \
+\
+```{r}
+xgboost_s_alg <- function(x_tr, y_tr, d_tr, x_val) {
+  fit_tau <- sboost(x_tr, d_tr, y_tr, nthread = 1, verbose = FALSE)
+  iate <- predict(fit_tau, newx = x_val)
+  return(iate)
+}
+```
+
+
+## XGBOOST T-LEARNER
+
+xgboost_t_alg: Implementation of XGBOOST T-Learner \
+\
+ Implemented using the \code{\link{xnie/rlearner}} package \
+\
+ @description T-learner learns the treated and control expected outcome 
+ respectively by fitting two separate models and taking the difference between outcomes.
+ XGBoost, or eXtreme Gradient Boosting, is a model that uses a technique called gradient 
+ boosting to build an ensemble of decision trees for both regression and classification task.    \
+ \
+ @param x_tr Matrix of training covariates (N x X matrix)       \
+ @param y_tr Vector of outcome values                           \
+ @param d_tr Vector of treatment indicators in training data    \
+ @param x_val Matrix of validation covariates (N x X matrix)    \
+ @import xnie/rlearner                                          \
+ \
+ @return Returns predicted IATEs of the validation sample       \
+ \
+ @export
+
+
+```{r}
+xgboost_t_alg <- function(x_tr, y_tr, d_tr, x_val) {
+  fit_tau <- tboost(x_tr, d_tr, y_tr, nthread = 1, verbose = FALSE)
+  iate <- predict(fit_tau, newx = x_val)
+  return(iate)
+}
+```
+
+## XGBOOST R-LEARNER
+ \
+ xgboost_r_alg: Implementation of XGBOOST R-Learner \
+ \
+ Implemented using the \code{\link{xnie/rlearner}} package \
+ \
+ @description The R-learner estimates tau by combining models that predict both the outcome and
+ the propensity score. We first fit and predict model on outcome. Then fit and predict model on 
+ treatment as outcome to calculate the propensity score. Then the function calculates the residuals 
+ by subtracting the predicted values from the actual outcomes and the predicted propensity scores 
+ from the actual treatment assignments, respectively. Then the pseudo-outcome is computed by 
+ dividing the residual of the outcome by the residual of the treatment assignment. This 
+ pseudo-outcome represents the estimated treatment effect for each observation. Then we fit 
+ the model on pseudo-outcome using the square of the residuals of the treatment assignment 
+ as weights. This adjustment in outcome helps to account for any potential confounding variables 
+ that may affect both the treatment assignment and the outcome. This weighting scheme ensures that 
+ observations with larger treatment assignment residuals have more influence in estimating the 
+ treatment effect. This approach allows us to obtain more reliable estimates of the treatment 
+ effect that are less biased by confounding variables.This approach allows us to obtain more 
+ reliable estimates of the treatment effect that are less biased by confounding variables.
+ XGBoost, or eXtreme Gradient Boosting, is a model that uses a technique called gradient 
+ boosting to build an ensemble of decision trees for both regression and classification tasks.
+ \
+ @param x_tr Matrix of training covariates (N x X matrix)    \
+ @param y_tr Vector of outcome values                        \
+ @param d_tr Vector of treatment indicators in training data \
+ @param x_val Matrix of validation covariates (N x X matrix) \
+ @import xnie/rlearner                                       \
+ \
+ @return Returns predicted IATEs of the validation sample \
+\
+ @export 
+
+```{r}
+xgboost_r_alg <- function(x_tr, y_tr, d_tr, x_val) {
+  fit_tau <- rboost(x_tr, d_tr, y_tr, nthread = 1, verbose = FALSE)
+  iate <- predict(fit_tau, newx = x_val)
+  return(iate)
+}
+```
+
+
+# Models Models
+
+cf_model: Implementation of CF model using the \code{\link{grf}} package
+causal forest estimates the impact of a treatment or intervention by combining 
+random forest techniques with causal inference principles. It builds an ensemble 
+of decision trees, each trained on different subsets of the data, to estimate 
+individualized treatment effects based on subjects' characteristics (covariates). 
+These individual estimates are then aggregated to provide an overall assessment of 
+the treatment's impact while accounting for potential confounding factors, making 
+it a valuable tool for causal analysis in observational data. /
+ /
+ @param x_tr Matrix of training covariates (N x X matrix)       /
+ @param y_tr Vector of outcome values in training data          /
+ @param d_tr Vector of treament indicators in training data     /
+ @param x_val Matrix of validation covariates (N x X matrix)    /
+ @param ntrain N of rows in training data                       /
+ @import grf                                                    /
+/
+ @return Returns predicted IATEs of the validation sample       /
+/
+ @export                                                        /
+
+```{r}
+cf_model_n <- function(x_tr, y_tr, d_tr, x_val, ntrain) {
+  cf <- causal_forest(x_tr, y_tr, d_tr, Y.hat = NULL, W.hat = NULL)
+  predictions <- predict(cf, x_val)$predictions
+  return(predictions)
+}
+```
+
+
+```{r data prep}
+## CA
+dat <- ca_subset_imputed
+
+# Assign names of Covariates
+co_vars <- ca_covariates
+outcome_vars <- ca_outcomes
+treatment_vars <- ca_treatment
+
+## ASAP
+
+# dat <- asap_subset_imputed
+#
+# # Assign names of Covariates
+# co_vars <- asap_covariates
+# outcome_vars <- asap_outcomes[ c( 2, 1, 3, 4)]  #Continous Variable should be 1st column, Binary Variable second Column. TODO: FIX THIS
+# treatment_vars <- asap_treatment
+
+# Complete Cases for outcomes
+dat <- dat %>% filter(complete.cases(.))
+
+# Seperate data frame into covariates, outcomes, and treatment variables
+
+.x_tr <- dat %>%
+  select(all_of(co_vars)) %>%
+  as.matrix()
+.y_tr <- dat %>%
+  select(all_of(outcome_vars)) %>%
+  as.matrix()
+
+.d_tr <- dat %>%
+  select(all_of(treatment_vars)) %>%
+  as.matrix()
+.x_val <- .x_tr # NOTE THIS treats the training set the same as the test dataset. May need to update with better subset
+
+
+# Convert all factor variables in covariate data frame to dummy variables
+.x_tr <- dummy_cols(.x_tr, remove_selected_columns = TRUE) %>% as.matrix()
+.x_val <- dummy_cols(.x_val, remove_selected_columns = TRUE) %>% as.matrix()
+
+.ntrain <- nrow(.x_tr)
+
+outcome_names <- outcome_vars[1:2] # First two variables happend to be continous and Binary
+```
+
+
+## Regression Model
+
+```{r}
+# Fit Linear Model on a binary variable using all variables
+lm_binary <- lm(.y_tr[, 2] ~ .d_tr + .x_tr)
+lm_cont <- lm(.y_tr[, 1] ~ .d_tr + .x_tr)
+
+# Extract Treatment effects as a stand alone variable
+lm_binary <- summary(lm_binary)
+lm_cont <- summary(lm_cont)
+
+
+t_binary <- lm_binary$coefficients[".d_tr", ]
+
+# Reformat treatment effects variable to data frame and snake case
+t_binary <- t_binary %>%
+  data.frame() %>%
+  t() %>%
+  data.frame()
+
+colnames(t_binary) <- colnames(t_binary) %>% snakecase::to_snake_case()
+
+# Add Confidence interval and Signficnance at 95%
+t_binary <- t_binary %>%
+  mutate(
+    lower_ci = estimate - (std_error * 1.96),
+    upper_ci = estimate + (std_error * 1.96),
+    significant = ifelse(pr_t <= 0.05, 1, 0)
+  )
+
+
+t_cont <- lm_cont$coefficients[".d_tr", ]
+
+# Reformat treatment effects variable to data frame and snake case
+t_cont <- t_cont %>%
+  data.frame() %>%
+  t() %>%
+  data.frame()
+
+colnames(t_cont) <- colnames(t_cont) %>% snakecase::to_snake_case()
+
+# Add Confidence interval and Signficnance at 95%
+t_cont <- t_cont %>%
+  mutate(
+    lower_ci = estimate - (std_error * 1.96),
+    upper_ci = estimate + (std_error * 1.96),
+    significant = ifelse(pr_t <= 0.05, 1, 0)
+  )
+```
+
+## Causal Forest
+
+```{r}
+cate_binary <- cf_model_n(
+  x_tr = .x_tr,
+  y_tr = .y_tr[, 2],
+  d_tr = .d_tr,
+  x_val = .x_val,
+  ntrain = .ntrain
+)
+
+cate_binary <- cate_binary %>% data.frame()
+colnames(cate_binary) <- outcome_vars[2]
+
+dat_binary <- dat %>%
+  filter(!is.na(!!sym(outcome_vars[2])))
+
+dat_te <- cbind(dat_binary, cate_binary)
+colnames(dat_te)[ncol(dat_te)] <- paste0("te_", outcome_vars[2])
+
+
+cate_cont <- cf_model_n(
+  x_tr = .x_tr,
+  y_tr = .y_tr[, 1],
+  d_tr = .d_tr,
+  x_val = .x_val,
+  ntrain = .ntrain
+)
+
+cate_cont <- cate_cont %>% data.frame()
+colnames(cate_cont) <- outcome_vars[1]
+
+dat_te <- cbind(dat_te, cate_cont)
+colnames(dat_te)[ncol(dat_te)] <- paste0("te_", outcome_vars[1])
+```
+
+
+# Predicted Values Exploration {.tabset}
+
+## Descriptive Statistics
+
+Binary Outcome
+
+```{r}
+cate_binary %>%
+  psych::describe() %>%
+  select(n, mean, median, min, max)
+
+t_binary
+```
+
+Continous OUtcome
+
+```{r}
+cat("CATE \n")
+cate_cont %>%
+  psych::describe() %>%
+  select(n, mean, median, min, max)
+
+cat("lm \n")
+t_cont
+```
+
+## Histogram
+```{r}
+# binary
+te_mean <- mean(dat_te[, paste0("te_", outcome_vars[2])])
+lm_mean <- t_binary$estimate
+lm_lower_ci <- t_binary$lower_ci
+lm_upper_ci <- t_binary$upper_ci
+
+dat_te %>%
+  ggplot(aes(
+    x = !!sym(paste0("te_", outcome_vars[2]))
+  )) +
+  geom_histogram(bins = 30, color = "grey50", fill = "turquoise2") +
+  geom_vline(xintercept = te_mean, color = "black", linetype = "solid", size = 1) +
+  geom_vline(xintercept = lm_mean, color = "firebrick", linetype = "longdash", size = 1) +
+  geom_vline(xintercept = lm_lower_ci, color = "firebrick2", linetype = "dotted", size = 1) +
+  geom_vline(xintercept = lm_upper_ci, color = "firebrick2", linetype = "dotted", size = 1) +
+  geom_vline(xintercept = 0, color = "gray10", size = .5) +
+  geom_hline(yintercept = 0, color = "gray10", size = .5)
+
+
+dat_te %>%
+  #  mutate(BLFEMALE = factor(BLFEMALE)) %>%
+  ggplot(aes(
+    x = !!sym(paste0("te_", outcome_vars[2])),
+    fill = ETHNIC, color = ETHNIC
+  )) + # CA GROUP TODO: FIX THIS
+  #    fill = BLFEMALE, color = BLFEMALE ) ) +  #ASAP GROUP TODO: FIX THIS
+  geom_histogram(bins = 30, position = "identity", alpha = 0.25) +
+  geom_vline(xintercept = te_mean, color = "black", linetype = "solid", size = 1) +
+  geom_vline(xintercept = lm_mean, color = "firebrick", linetype = "longdash", size = 1) +
+  geom_vline(xintercept = lm_lower_ci, color = "firebrick2", linetype = "dotted", size = 1) +
+  geom_vline(xintercept = lm_upper_ci, color = "firebrick2", linetype = "dotted", size = 1) +
+  geom_vline(xintercept = 0, color = "gray10", size = .5) +
+  geom_hline(yintercept = 0, color = "gray10", size = .5)
+```
+
+```{r}
+# Continous
+te_mean <- mean(dat_te[, paste0("te_", outcome_vars[1])])
+lm_mean <- t_cont$estimate
+lm_lower_ci <- t_cont$lower_ci
+lm_upper_ci <- t_cont$upper_ci
+
+dat_te %>%
+  ggplot(aes(
+    x = !!sym(paste0("te_", outcome_vars[1]))
+  )) +
+  geom_histogram(bins = 30, color = "grey50", fill = "turquoise2") +
+  geom_vline(xintercept = te_mean, color = "black", linetype = "solid", size = 1) +
+  geom_vline(xintercept = lm_mean, color = "firebrick", linetype = "longdash", size = 1) +
+  geom_vline(xintercept = lm_lower_ci, color = "firebrick2", linetype = "dotted", size = 1) +
+  geom_vline(xintercept = lm_upper_ci, color = "firebrick2", linetype = "dotted", size = 1) +
+  geom_vline(xintercept = 0, color = "gray10", size = .5) +
+  geom_hline(yintercept = 0, color = "gray10", size = .5)
+
+dat_te %>%
+  #  mutate(BLFEMALE = factor(BLFEMALE)) %>%
+  ggplot(aes(
+    x = !!sym(paste0("te_", outcome_vars[1])),
+    fill = ETHNIC, color = ETHNIC
+  )) + # CA GROUP TODO: FIX THIS
+  #  fill = BLFEMALE, color = BLFEMALE ) ) +  #ASAP GROUP TODO: FIX THIS
+  geom_histogram(bins = 30, position = "identity", alpha = 0.25) +
+  geom_vline(xintercept = te_mean, color = "black", linetype = "solid", size = 1) +
+  geom_vline(xintercept = lm_mean, color = "firebrick", linetype = "longdash", size = 1) +
+  geom_vline(xintercept = lm_lower_ci, color = "firebrick2", linetype = "dotted", size = 1) +
+  geom_vline(xintercept = lm_upper_ci, color = "firebrick2", linetype = "dotted", size = 1) +
+  geom_vline(xintercept = 0, color = "gray10", size = .5) +
+  geom_hline(yintercept = 0, color = "gray10", size = .5)
+```
