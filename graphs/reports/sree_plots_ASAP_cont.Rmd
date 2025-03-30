@@ -1,0 +1,651 @@
+---
+title: "Template Based on SREE Plots - Work in Progress"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    df_print: paged
+    fig_caption: yes
+    fig_height: 8
+    fig_width: 10
+    highlight: pygments
+    theme: spacelab
+    toc: yes
+    toc_depth: 6
+    toc_float: yes
+  pdf_document:
+    toc: yes
+    toc_depth: '6'
+editor_options:
+  markdown:
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+
+library(writexl)
+knitr::opts_chunk$set( echo = TRUE )
+```
+
+# Set up
+
+```{r source previous script,  include=FALSE}
+# Load script 08
+source(here::here("simulation_pipeline/08_run_simulation.R"))
+
+
+#read in file 
+combined_all = read.xlsx(here::here("graphs/combined/combined_all_asap_cont.xlsx"))
+
+
+
+# SREE 2024 Plots and Results
+#
+# This script makes all the plots in the SREE 2024 presentation,
+# including the regression coefficient plots and the contour plots
+
+library( tidyverse )
+library(ggplot2)
+
+library(cowplot) # For making legend-only subplot
+
+source( here::here( "graphs/load_simulation_results.R" ) )
+source( here::here( "graphs/contour_plot_code.R" ) )
+
+
+
+# Check if the "sree2024" directory exists, if not, create it
+if (!dir.exists(here::here("graphs/sree2024"))) {
+  dir.create(here::here("graphs/sree2024"))
+}
+
+
+
+asap2_agg = filter(df_agg, 
+                 outcome_index == 2,
+                 dataset == "asap" )
+table( df$set_id )
+
+max_bias = max( df$bias )
+max_se = max( df$se )
+
+# hard coded to make all plots on same dimensions
+max_bias = .5
+max_se = .5
+
+
+# Plot of just the RF T queen ----
+table( df$queen )
+
+dd = filter( df, cov_set_size == "small", train_set_size == 1000, queen == "RF T" )
+
+p1C <- ggplot( no_core( dd ), aes(se, bias) ) +
+  contour_plot_base( max_bias = max_bias, max_se = max_se, step = .1, include_scales = FALSE ) +
+  geom_point( aes(color = type), size = 4, shape=19 ) +
+  geom_point( data = only_core( dd ), aes(pch=model), col="darkgrey", fill="darkgrey", size=4 ) +
+  #  geom_point( data = gbs, size = 7, shape = 1, col="red" ) +
+  scale_shape_manual(breaks = c( "ATE", "OLS S", "LASSO INF", "RF INF" ),
+                     values = c( 15, 23, 25, 24 ) ) +
+  guides(color = guide_legend(title = "Model Type"),
+         shape = guide_legend(title = "Reference") ) +
+  coord_fixed( xlim=c(0, max_se) ) 
+
+```
+
+# contour_RFT_1000_legend.pdf
+
+```{r contour_RFT_1000_legend.pdf}
+p1C + ggrepel::geom_text_repel(
+  aes(label = modelshort, col = type),
+  size = 3, # Increased label size
+  max.overlaps = Inf,
+  min.segment.length = Inf,
+  show.legend = FALSE
+)
+
+
+
+# Extract the legend and save it ----
+
+# This makes it easy to arrange things on slides by giving a separate
+# image for the legend.
+legend <- cowplot::get_legend(p1C)
+
+# Plot only the legend
+legend_plot <- ggdraw(legend)
+# legend_plot
+
+# Save the legend as a separate image
+#ggsave("graphs/sree2024/legend_only.png", plot = legend_plot, width = 5, height = 5)
+
+
+
+# Now make the plot without the legend
+
+dd = filter( df, cov_set_size == "small", train_set_size == 1000, queen == "RF T" )
+p1C <- ggplot( no_core( dd ), aes(se, bias) ) +
+  contour_plot_base( max_bias = max_bias, max_se = max_se, step = .1, include_scales = FALSE ) +
+  geom_point( aes(color = type), size = 4, shape=19 ) +
+  geom_point( data = only_core( dd ), aes(pch=model), col="darkgrey", fill="darkgrey", size=4 ) +
+  #  geom_point( data = gbs, size = 7, shape = 1, col="red" ) +
+  scale_shape_manual(breaks = c( "ATE", "OLS S", "LASSO INF", "RF INF" ),
+                     values = c( 15, 23, 25, 24 ) ) +
+  guides(color = guide_legend(title = "Model Type"),
+         shape = guide_legend(title = "Reference") ) +
+  coord_fixed( xlim=c(0, max_se) ) +
+  theme( legend.position = "none" )
+
+```
+
+# contour_RFT_1000.pdf
+
+```{r contour_RFT_1000.pdf}
+p1C + ggrepel::geom_text_repel(
+  aes(label = modelshort, col = type),
+  size = 3, # Increased label size
+  max.overlaps = Inf,
+  min.segment.length = Inf,
+  show.legend = FALSE
+)
+#ggsave( filename = "graphs/sree2024/contour_RFT_1000.pdf", width = IMAGE_WIDTH, height = 5 )
+
+
+
+# Plot averaged across queens ----
+
+table( df$queen )
+
+dd = filter( asap2_agg, outcome_index == 2, 
+             cov_set_size == "small", 
+             train_set_size == 1000 )
+
+p1C <- ggplot( no_core( dd ), aes(se, bias) ) +
+  contour_plot_base( max_bias = max_bias, max_se = max_se, step = .1, include_scales = FALSE ) +
+  geom_point( aes(color = type), size = 4, shape=19 ) +
+  geom_point( data = only_core( dd ), aes(pch=model), col="darkgrey", fill="darkgrey", size=4 ) +
+  #  geom_point( data = gbs, size = 7, shape = 1, col="red" ) +
+  scale_shape_manual(breaks = c( "ATE", "OLS S", "LASSO INF", "RF INF" ),
+                     values = c( 15, 23, 25, 24 ) ) +
+  guides(color = guide_legend(title = "Model Type"),
+         shape = guide_legend(title = "Reference") ) +
+  coord_fixed( xlim=c(0, max_se) ) +
+  theme( legend.position = "none" )
+
+```
+
+# contour_all_1000.pdf
+
+```{r contour_all_1000.pdf}
+
+p1C + ggrepel::geom_text_repel(
+  aes(label = modelshort, col = type),
+  size = 3, # Increased label size
+  max.overlaps = Inf,
+  min.segment.length = Inf,
+  show.legend = FALSE
+)
+
+#ggsave( filename = "graphs/sree2024/contour_all_1000.pdf", width = IMAGE_WIDTH, height = 5 )
+
+
+
+# Moving to large covariate set plot  ----
+
+d_b = make_trail_set( filter( asap2_agg, 
+                              train_set_size == 1000,
+                              outcome_index == 2,
+                              cov_set_size=="small"),
+                      filter( asap2_agg, 
+                              train_set_size == 1000,
+                              outcome_index == 2,
+                              cov_set_size=="large" ) )
+
+
+pltB <-  ggplot( no_core( d_b ), aes(se, bias) ) +
+  contour_plot_base( max_bias = max_bias, max_se = max_se, step = .1,include_scales = FALSE ) +
+  geom_segment( data= d_b, aes(x = se_pre, y = bias_pre, xend = se, yend = bias),
+                #arrow = arrow(length = unit(0.2, "cm")),
+                lwd = 1, col="lightgrey") +
+  geom_point( data = no_core( d_b ), aes(color = type), size = 4, shape=19 ) +
+  geom_point( data = only_core( d_b ), aes(pch=model), col="darkgrey", fill="darkgrey", size=4 ) +
+  #labs( title = "Trails of Models from 1000 to 5000 training size",
+  #      subtitle = "Aggregated over scenarios and queens" ) + 
+  #scale_size_identity() +
+  scale_shape_manual(breaks = c( "ATE", "OLS S", "LASSO INF", "RF INF" ),
+                     values = c( 15, 23, 25, 24 ) ) +
+  guides(color = guide_legend(title = "Model Type"),
+         shape = guide_legend(title = "Reference") ) +
+  coord_fixed( xlim=c(0, max_se) ) +
+  theme( legend.position = "none" )
+
+pltB
+
+
+``` 
+
+# contour_trail_to_large.pdf
+
+```{r contour_trail_to_large.pdf}
+pltB + ggrepel::geom_text_repel(
+  aes(label = modelshort, col = type),
+  size = 3, # Increased label size
+  max.overlaps = Inf,
+  min.segment.length = Inf,
+  show.legend = FALSE
+)
+
+#ggsave( filename = "graphs/sree2024/contour_trail_to_large.pdf", 
+ #       width = IMAGE_WIDTH, height = 5 )
+
+
+
+
+
+
+
+# Moving to large training set plot  ----
+
+d_b = make_trail_set( filter( asap2_agg, 
+                              outcome_index == 2,
+                              train_set_size == 1000,
+                              cov_set_size=="large"),
+                      filter( asap2_agg, train_set_size == 5000, cov_set_size=="large" ) )
+
+
+pltB <-  ggplot( no_core( d_b ), aes(se, bias) ) +
+  contour_plot_base( max_bias = max_bias, max_se = max_se,step = .1, include_scales = FALSE ) +
+  geom_segment( data= d_b, aes(x = se_pre, y = bias_pre, xend = se, yend = bias),
+                #arrow = arrow(length = unit(0.2, "cm")),
+                lwd = 1, col="lightgrey") +
+  geom_point( data = no_core( d_b ), aes(color = type), size = 4, shape=19 ) +
+  geom_point( data = only_core( d_b ), aes(pch=model), col="darkgrey", fill="darkgrey", size=4 ) +
+  #labs( title = "Trails of Models from 1000 to 5000 training size",
+  #      subtitle = "Aggregated over scenarios and queens" ) + 
+  #scale_size_identity() +
+  scale_shape_manual(breaks = c( "ATE", "OLS S", "LASSO INF", "RF INF" ),
+                     values = c( 15, 23, 25, 24 ) ) +
+  guides(color = guide_legend(title = "Model Type"),
+         shape = guide_legend(title = "Reference") ) +
+  coord_fixed( xlim=c(0, max_se) ) +
+  theme( legend.position = "none" )
+
+pltB
+
+
+```
+
+# contour_trail_to_5000.pdf
+
+```{r contour_trail_to_5000.pdf}
+pltB + ggrepel::geom_text_repel(
+  aes(label = modelshort, col = type),
+  size = 3, # Increased label size
+  max.overlaps = Inf,
+  min.segment.length = Inf,
+  show.legend = FALSE
+)
+
+#ggsave( filename = "graphs/sree2024/contour_trail_to_5000.pdf", width = IMAGE_WIDTH, height = 5 )
+
+
+
+
+# Binary outcome ----
+
+bin <- df %>% 
+  dplyr::filter( outcome_index == 2 )
+table( bin$model )
+
+filter( df, outcome_index == 2, model == "LASSO INF" ) %>%
+  dplyr::select( -bias, -rmse, -se, -outcome_index )
+
+filter( df, outcome_index == 2, model == "BART T" ) %>%
+  dplyr::select( -bias, -rmse, -se, -outcome_index )
+# 
+# if ( FALSE ) {
+#   
+#   asap <- df %>% 
+#     dplyr::filter( dataset == "asap" )
+#   table( asap$model )
+#   
+#   group_by( model, modelshort, type, baseline ) %>%
+#     summarise( n = n(),
+#                bias = sqrt( mean(bias^2 ) ),
+#                se = sqrt( mean( se^2 ) ),
+#                rmse = sqrt( mean( rmse^2 ) ), .groups = "drop" )
+#   
+#   bin <- df_agg %>% 
+#     dplyr::filter( outcome_index == 2, dataset == "ca" )
+#   
+#   dd = bin
+#   max_bias = 0.15 #max( dd$bias )
+#   max_se = 0.15 #max( dd$se )
+#   p1C <- ggplot( no_core( dd ), aes(se, bias) ) +
+#     contour_plot_base( max_bias = max_bias, max_se = max_se, include_scales = FALSE, step = 0.025 ) +
+#     geom_point( aes(color = type), size = 4, shape=19 ) +
+#     geom_point( data = only_core( dd ), aes(pch=model), col="darkgrey", fill="darkgrey", size=4 ) +
+#     #  geom_point( data = gbs, size = 7, shape = 1, col="red" ) +
+#     scale_shape_manual(breaks = c( "ATE", "OLS S", "LASSO INF", "RF INF" ),
+#                        values = c( 15, 23, 25, 24 ) ) +
+#     guides(color = guide_legend(title = "Model Type"),
+#            shape = guide_legend(title = "Reference") ) +
+#     coord_fixed( xlim=c(0, max_se) ) +
+#     theme( legend.position = "none" )
+#   
+#   p1C + ggrepel::geom_text_repel(
+#     aes(label = modelshort, col = type),
+#     size = 3, # Increased label size
+#     max.overlaps = Inf,
+#     min.segment.length = Inf,
+#     show.legend = FALSE
+#   )
+#   ggsave( filename = "graphs/sree2024/binary_ca.pdf", width = IMAGE_WIDTH, height = 5 )
+#   
+# }
+
+
+# By queen ----
+
+
+df <- mutate( df, is_ATE = ifelse( queen == "ATE", "ATE", "Not ATE" ) )
+
+table( df$model )
+
+```
+
+
+# all_queen_plot.pdf 
+
+```{r all_queen_plot.pdf}
+ggplot( df, aes(se, bias, xmax=max_se, ymax=max_bias,  col=is_ATE, pch= ) ) +
+  facet_wrap( ~ model, nrow=3 ) +
+  contour_plot_base( max_bias = max_bias, max_se = max_bias,step= .1, include_scales = FALSE) +
+  geom_point( size = 1, shape=19, alpha=0.8 ) +
+  labs( #title = "All queens for all models across all CA sets",
+    color = "ATE Queen" ) + 
+  scale_size_identity() +
+  scale_color_manual(breaks = c("ATE", "Not ATE"),
+                     values = c( "red", "black" ) ) +
+  theme(panel.grid.minor = element_blank(),
+        legend.position = "none" )
+
+
+#ggsave( filename = "graphs/sree2024/all_queen_plot.pdf", width = 11, height = 6 )
+
+
+
+
+
+# Performance across 6 scenarios
+
+table( asap2_agg$model )
+
+
+# ggplot( asap2_agg, aes( cov_set_size, rmse, group=as.factor(train_set_size), col=as.factor(train_set_size) ) ) +
+#   facet_wrap( ~model ) +
+#   geom_line() + geom_point() +
+#   theme_minimal() +
+#   theme( panel.grid.minor = element_blank() )
+
+
+
+
+# Regression plots ----
+
+# These plots plot the results of regressing rmse, se, and bias onto
+# the simulation conditions and queen and model.
+#
+# We fit three models, and then make plots of the different families
+# of coefficients.
+
+
+# Prep data for regression by making ATE the reference category for
+# both queen and model.
+df
+df_sub <- df %>%
+  dplyr::filter( outcome_index == 2,
+                 dataset == "asap" ) %>%
+  mutate( model = relevel( factor( model ), ref = "ATE" ),
+          queen = relevel( factor( queen ), ref = "ATE" ),
+          cov_set_size = factor( cov_set_size, levels = c("small","medium","large" ) ),
+          N5000 = 0 + (train_set_size==5000),
+  ) %>%
+  dplyr::filter( !str_detect( model, "INF"))
+
+
+## Match queen and model for "home field advantage" flag ----
+
+
+# table( df_sub$model )
+# table( df_sub$queen )
+# 
+# setdiff( unique( df_sub$model ), 
+#          unique( df_sub$queen ) )
+
+# This tries to get which models are "at home" with which queens.
+#
+# TODO: Update this to generate a "linear model/linear queen" match.
+home <- function( model, queen ) {
+  if ( model == queen ) {
+    return( TRUE )
+  }
+  if ( model == "BART S" ) {
+    return (queen == "BART T" )
+  }
+  if ( str_detect( model, "LASSO" ) ) {
+    return( str_detect( queen, "LASSO" ) )
+  }
+  if ( model == "SL S" ) {
+    return (queen == "SL T" )
+  }
+  if ( str_detect( model, "RF MOM" ) ) {
+    return( queen == "RF MOM IPW" )
+  }
+  if ( model == "CF LC" ) {
+    return( queen == "CF" )
+  }
+  return( FALSE )
+}
+
+# testing code
+home( df_sub$model[[4]], df_sub$queen[[4]] )
+
+# Calculate home for each model
+df_sub <- mutate( df_sub,
+                  home = map2_dbl( model, queen, home ) )
+
+
+## Fit the linear models & make result tables ----
+
+M_rmse = lm( rmse ~ 1 + model + queen + cov_set_size + N5000 + home, data = df_sub )
+M_se = lm( se ~ 1 + model + queen + cov_set_size + N5000 + home, data = df_sub )
+M_bias = lm( bias ~ 1 + model + queen + cov_set_size + N5000 + home, data = df_sub )
+
+
+
+library( broom )
+c_rmse <- tidy( M_rmse ) %>%
+  dplyr::select( term, estimate, std.error )
+c_se <- tidy( M_se ) %>%
+  dplyr::select( term, estimate, std.error )
+c_bias <- tidy( M_bias ) %>%
+  dplyr::select( term, estimate, std.error )
+
+cs <- bind_rows( rmse = c_rmse, se = c_se, bias = c_bias, .id = "measure" )
+cs$term = str_replace( cs$term, "cov_set_size", "cov_" )
+cs$term = str_replace( cs$term, "queen", "Q " )
+cs$term = str_replace( cs$term, "model", "model " )
+table( cs$term )
+
+cs <- cs %>%
+  dplyr::filter( term != "(Intercept)" ) %>%
+  mutate( queen = ifelse( str_detect( term, "Q " ), "queen",
+                          ifelse( str_detect( term, "model" ), "model", "coef" ) ),
+          term = str_replace(term, "model |queen ", "" ) )
+
+csA = cs
+
+c_coef <- filter( csA,
+                  term %in% c( "N5000", "cov_medium", "cov_large", "home", "(Intercept)" ) ) %>%
+  arrange( term ) %>%
+  dplyr::select( -queen ) %>%
+  relocate( term )
+
+
+cs <- cs %>%
+  dplyr::filter( !term %in% c( "N5000", "cov_medium", "cov_large", "home", "(Intercept)" ) )
+table( cs$term )
+
+# Sort the coefficients by performance in terms of rmse
+ord = cs %>% 
+  dplyr::filter( measure =="rmse" ) %>%
+  mutate( f = reorder( factor( term ), estimate ) )
+ord$f
+
+cs
+cs <- mutate( cs, 
+              term = factor( term, levels = levels(ord$f) ) )
+cs
+
+levels( cs$term[ cs$queen == "queen" ] )
+
+
+## Make the final coefficient plots ----
+
+
+# Plot model and queen on single plot
+library( scales )
+```
+
+# coef_plot.pdf
+
+```{r coef_plot.pdf}
+ggplot( cs, aes( term, estimate, color = measure ) ) +
+  facet_wrap( ~ queen, scales = "free" ) +
+  geom_hline( yintercept = 0 ) +
+  #  geom_linerange( aes( ymin = 0, ymax = estimate ),
+  #                  position = position_dodge(width = 0.3),
+  #                  size = 1, alpha=0.5) +
+  geom_point( position = position_dodge(width = 0.4) ) +
+  geom_errorbar( aes( ymin = estimate - 2*std.error, ymax = estimate + 2*std.error ),
+                 position = position_dodge(width = 0.4), 
+                 width = 0 ) +
+  coord_flip() +
+  theme_minimal() +
+  labs( x = "", y="" ) +
+  scale_x_discrete( labels = label_wrap(10) )
+
+##ggsave( filename = "graphs/sree2024/coef_plot.pdf", width = 11, height = 6 )
+
+
+
+# Plot the model coefficients only
+
+cs$termW = cs$term
+lvl = levels( cs$termW )
+levels( cs$termW ) <- str_pad(lvl, 
+                              width = max(nchar(lvl)), 
+                              side = "left")
+
+
+c2 <- filter( cs, queen != "queen" )
+
+```
+
+# coef_plot.pdf 2
+
+```{r coef_plot.pdf 2}
+ggplot( c2, aes( term, estimate, color = measure ) ) +
+  geom_hline( yintercept = 0 ) +
+  geom_point( position = position_dodge(width = 0.4) ) +
+  geom_errorbar( aes( ymin = estimate - 2*std.error, ymax = estimate + 2*std.error ),
+                 position = position_dodge(width = 0.4), 
+                 width = 0 ) +
+  coord_flip() +
+  theme_minimal() +
+  labs( x = "", y="" )  +
+  scale_y_continuous( limits = c( -1, 1)) +
+  theme( plot.margin = unit(c(1, 0.1, 0.1, 1.5), "cm") ) +
+  scale_x_discrete( labels = label_wrap(10) )
+
+#ggsave( filename = "graphs/sree2024/coef_plot.pdf",
+ #       width = 7, height = 6 ) 
+
+
+# Plot the queens only
+
+# TODO: I don't like the shift relative to ATE.  Hard to see variation
+# in the rmse across queens.  Is this ideal?
+
+```
+
+# coef_plot_queen.pdf
+
+```{r coef_plot_queen.pdf}
+c3 = filter( cs, queen == "queen" )
+ggplot( c3, aes( term, estimate, color = measure ) ) +
+  geom_hline( yintercept = 0 ) +
+  geom_point( position = position_dodge(width = 0.4) ) +
+  geom_errorbar( aes( ymin = estimate - 2*std.error, ymax = estimate + 2*std.error ),
+                 position = position_dodge(width = 0.4), 
+                 width = 0 ) +
+  coord_flip() +
+  theme_minimal() +
+  labs( x = "", y="" )  +
+  scale_y_continuous( limits = c( -1, 1)) +
+  theme( plot.margin = unit(c(1, 0.1, 0.1, 1.5), "cm") ) +
+  scale_x_discrete( labels = label_wrap(10) )
+
+#ggsave( filename = "graphs/sree2024/coef_plot_queen.pdf",
+ #       width = 7, height = 6 ) 
+
+
+```
+
+# ex_factor_plot.pdf
+
+```{r ex_factor_plot.pdf}
+# Plot simulation factors only
+ggplot( c_coef, aes( term, estimate, color = measure ) ) +
+  geom_hline( yintercept = 0 ) +
+  geom_point( position = position_dodge(width = 0.4) ) +
+  geom_errorbar( aes( ymin = estimate - 2*std.error, ymax = estimate + 2*std.error ),
+                 position = position_dodge(width = 0.4), 
+                 width = 0 ) +
+  coord_flip( clip="on") +
+  theme_minimal() +
+  labs( x = "", y="" ) +
+  scale_y_continuous( limits = c( -1, 1)) +
+  theme( plot.margin = unit(c(1, 0.1, 0.1, 1.5), "cm") ) +
+  scale_x_discrete( labels = label_wrap(10) )
+
+
+
+
+#ggsave( filename = "graphs/sree2024/ex_factor_plot.pdf", 
+ #       width = 7, height = 6 ) 
+
+
+```
+
+# Plot everything on single plot
+
+```{r Plot everything on single plot}
+# Fix the ordering of factors to keep grouping
+
+csA$term <- fct_reorder( factor( csA$term ), 
+                         100 * as.numeric( as.factor( csA$queen ) ) + (csA$measure =="rmse") * csA$estimate )
+levels( csA$term )
+ggplot( csA, aes( term, estimate, color = measure ) ) +
+  geom_hline( yintercept = 0 ) +
+  geom_point( position = position_dodge(width = 0.4) ) +
+  geom_errorbar( aes( ymin = estimate - 2*std.error, ymax = estimate + 2*std.error ),
+                 position = position_dodge(width = 0.4), 
+                 width = 0 ) +
+  coord_flip( clip="on") +
+  theme_minimal() +
+  labs( x = "", y="" ) +
+  scale_y_continuous( limits = c( -1, 1)) +
+  theme( plot.margin = unit(c(1, 0.1, 0.1, 1.5), "cm") ) +
+  scale_x_discrete( labels = label_wrap(10) )
+
+

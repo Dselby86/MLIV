@@ -1,0 +1,981 @@
+---
+title: "Combined Results Template - Work in Progress"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    df_print: paged
+    fig_caption: yes
+    fig_height: 8
+    fig_width: 10
+    highlight: pygments
+    theme: spacelab
+    toc: yes
+    toc_depth: 6
+    toc_float: yes
+  pdf_document:
+    toc: yes
+    toc_depth: '6'
+editor_options:
+  markdown:
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+
+library(writexl)
+knitr::opts_chunk$set( echo = TRUE )
+```
+
+
+#TODO:: MOVE
+
+```{r define function aggregate_time_by_queen, include=FALSE}
+#' aggregate_time_by_queen: Mean of processing time across obs by model and queen
+#'
+#' Needs to be stacked performance stats with a "queen" column
+#' indicating where the impacts came from.
+#'
+#' @param performance_stats Matrix of bias, SE, and RMSE 
+#'
+#' 
+
+aggregate_time_by_queen = function( performance_stats ) {
+  
+  stopifnot( "queen" %in% colnames(performance_stats) )
+  
+  agg_stat = performance_stats %>% 
+    filter( metric == "runtime") %>%
+    pivot_longer( cols = any_of( ALL_MODELS ),
+                  names_to = "model",
+                  values_to = "value" ) %>%
+    
+    group_by( model, queen ) %>%
+    summarise( runtime =mean( value ),
+               .groups = "drop")
+  
+  return( agg_stat )
+}
+```
+
+
+```{r define function aggregated_performance_by_queen , include=FALSE}
+#' aggregated_performance_by_queen: Aggregate performance characteristics
+#' (Bias, SE, RMSE) across all observations by model by queen.
+#'
+#' Needs to be stacked performance stats with a "queen" column
+#' indicating where the impacts came from.
+#'
+#' @param performance_stats Matrix of bias, SE, and RMSE 
+#'
+#' NOTE/WARNING:
+#'   Bias is squared and then averaged, which will give a semi-funky
+#'   mean of of absolute bias.
+#' 
+
+aggregated_performance_by_queen <- function( performance_stats ) {
+  
+  stopifnot( "queen" %in% colnames(performance_stats) )
+  
+  agg_stat = performance_stats %>% 
+    pivot_longer( cols = any_of( ALL_MODELS ),
+                  names_to = "model",
+                  values_to = "value" ) %>%
+    filter( !( metric %in% c( "runtime", "percent_cut" ) ) ) %>%
+    group_by( metric, model, queen ) %>%
+    summarise( Ev = sqrt( mean( value^2 ) ),
+               Q1 = quantile( value, 0.25 ),
+               Q3 = quantile( value, 0.75 ),
+               .groups = "drop" ) 
+  
+  return( agg_stat )
+}
+```
+
+
+
+```{r define aggregated_performance_by_queen, include=FALSE}
+#' aggregate_outliers_by_queen: Mean percent of outliers cut by model and queen
+#'
+#' Needs to be stacked performance stats with a "queen" column
+#' indicating where the impacts came from.
+#'
+#' @param performance_stats Matrix of bias, SE, and RMSE 
+#'
+#' 
+
+aggregate_outliers_by_queen = function( performance_stats ) {
+  
+  stopifnot( "queen" %in% colnames(performance_stats) )
+  
+  agg_stat = performance_stats %>% 
+    filter( metric == "percent_cut") %>%
+    pivot_longer( cols = any_of( ALL_MODELS ),
+                  names_to = "model",
+                  values_to = "value" ) %>%
+    
+    group_by( model, queen ) %>%
+    summarise( percent_cut = ( mean( value ) * 100 ),
+               .groups = "drop")
+  
+  return( agg_stat )
+}
+```
+
+
+
+
+# Set up
+
+```{r source previous script,  include=FALSE}
+# Load script 08
+source(here::here("simulation_pipeline/08_run_simulation.R"))
+```
+
+>Load the raw output of your simulation here:
+
+```{r create read_and_aggregate }
+
+#Create 'read_and_aggregate': function reads simulation results and aggregates to the mean across all queens
+read_and_aggregate = function(relative_path,cov_set_size, dataset, outcome_index, train_set_size){
+  
+  df =  readRDS(here::here(paste0( "/data/share/cdi/mliv/local repos/bigjobs/MLIV/", relative_path)))
+  
+  # Aggregate performance (Bias, SE, RMSE) by queen
+  agg_perf_by_queen = aggregated_performance_by_queen(df)
+  
+  # Reshape agg_perf_by_queen so metrics are the columns
+  wide_Ev_agg_perf_by_queen = pivot_wider(
+                                        data = agg_perf_by_queen,
+                                        id_cols = c("model", "queen" ),
+                                        names_from = metric,
+                                        values_from = Ev,
+                                        names_prefix = ""
+                                       )
+# Order by model by queen
+wide_Ev_agg_perf_by_queen <- wide_Ev_agg_perf_by_queen  %>% 
+                              arrange(factor(model, levels = ALL_MODELS), factor(queen, levels = ALL_MODELS))
+
+  wide_Ev_agg_perf_by_queen$cov_set_size = cov_set_size
+  wide_Ev_agg_perf_by_queen$dataset = dataset
+  wide_Ev_agg_perf_by_queen$outcome_index = outcome_index
+  wide_Ev_agg_perf_by_queen$train_set_size = train_set_size
+
+
+# Add type column
+wide_Ev_agg_perf_by_queen = wide_Ev_agg_perf_by_queen %>%
+                mutate(type = case_when(
+                       model == "ATE" ~ "ATE",
+                       model == "OLS S" ~ "OLS S",
+                       model %in% c("RF INF", "LASSO INF") ~ "INF",
+                       model %in% c("RF T", "RF MOM IPW", "RF MOM DR", "CF", "CF LC") ~ "RF",
+                       model %in% c("LASSO T", "LASSO MOM IPW", "LASSO MOM DR", "LASSO MCM", "LASSO MCM EA", "LASSO R") ~ "LASSO",
+                       model == "CDML" ~ "CDML",
+                       model %in% c("BART T", "BART S") ~ "BART",
+                       model %in% c("XGBOOST S", "XGBOOST R") ~ "XGBOOST",
+                       model %in% c("SL T", "SL S") ~ "SL",
+                       TRUE ~ "Unknown"
+                       ))%>%
+                mutate(modelshort = case_when(
+                        model %in% c("OLS S", "ATE", "CDML") ~ type,
+                        .default = trimws(str_remove(model, type))))
+
+    return (wide_Ev_agg_perf_by_queen)
+}
+
+```
+
+```{r run read_and_aggregate}
+#read in and aggregate files, across queens
+ca_1_1000_small_noSL = read_and_aggregate(cov_set_size = "small", dataset = "ca", outcome_index = 1, train_set_size = "1000", relative_path = "results/aggregated_IATEs/ca/simulation_from_080524/aggregated_IATEs_data.rds")
+
+ca_1_1000_small_SL = read_and_aggregate(cov_set_size = "small", dataset = "ca", outcome_index = 1, train_set_size = "1000", relative_path = "results/aggregated_IATEs/ca/simulation_from_091024/aggregated_IATEs_data.rds")  %>% filter(model %in% c("SL S", "SL T"))
+
+ca_1_1000_medium_noSL = read_and_aggregate(cov_set_size = "medium", dataset = "ca", outcome_index = 1, train_set_size = "1000", relative_path = "results/aggregated_IATEs/ca/simulation_from_080624/aggregated_IATEs_data.rds")
+
+ca_1_1000_medium_SL = read_and_aggregate(cov_set_size = "medium", dataset = "ca", outcome_index = 1, train_set_size = "1000", relative_path = "results/aggregated_IATEs/ca/simulation_from_091124/aggregated_IATEs_data.rds")%>% filter(model %in% c("SL S", "SL T"))
+
+
+ca_1_1000_large_noSL = read_and_aggregate(cov_set_size = "large", dataset = "ca", outcome_index = 1, train_set_size = "1000", relative_path = "results/aggregated_IATEs/ca/simulation_from_080724/aggregated_IATEs_data.rds")
+
+ca_1_1000_large_SL = read_and_aggregate(cov_set_size = "large", dataset = "ca", outcome_index = 1, train_set_size = "1000", relative_path = "results/aggregated_IATEs/ca/simulation_from_091624/aggregated_IATEs_data.rds")%>% filter(model %in% c("SL S", "SL T"))
+
+ca_1_2000_small_noSL = read_and_aggregate(cov_set_size = "small", dataset = "ca", outcome_index = 1, train_set_size = "2000", relative_path = "results/aggregated_IATEs/ca/simulation_from_080824/aggregated_IATEs_data.rds")
+
+ca_1_2000_small_SL = read_and_aggregate(cov_set_size = "small", dataset = "ca", outcome_index = 1, train_set_size = "2000", relative_path = "results/aggregated_IATEs/ca/simulation_from_091824/aggregated_IATEs_data.rds")%>% filter(model %in% c("SL S", "SL T"))
+
+
+ca_1_2000_medium_noSL = read_and_aggregate(cov_set_size = "medium", dataset = "ca", outcome_index = 1, train_set_size = "2000", relative_path = "results/aggregated_IATEs/ca/simulation_from_081424/aggregated_IATEs_data.rds")
+
+ca_1_2000_medium_SL = read_and_aggregate(cov_set_size = "medium", dataset = "ca", outcome_index = 1, train_set_size = "2000", relative_path = "results/aggregated_IATEs/ca/simulation_from_092424/aggregated_IATEs_data.rds")%>% filter(model %in% c("SL S", "SL T"))
+
+
+ca_1_2000_large_noSL = read_and_aggregate(cov_set_size = "large", dataset = "ca", outcome_index = 1, train_set_size = "2000", relative_path = "results/aggregated_IATEs/ca/simulation_from_082224/aggregated_IATEs_data.rds")
+
+
+ca_1_2000_large_SL = read_and_aggregate(cov_set_size = "large", dataset = "ca", outcome_index = 1, train_set_size = "2000", relative_path = "results/aggregated_IATEs/ca/simulation_from_092524/aggregated_IATEs_data.rds")%>% filter(model %in% c("SL S", "SL T"))
+
+
+combined_all = rbind(ca_1_1000_small_noSL, ca_1_1000_small_SL,
+                     ca_1_1000_medium_noSL, ca_1_1000_medium_SL, 
+                     ca_1_1000_large_noSL, ca_1_1000_large_SL,
+                     ca_1_2000_small_noSL, ca_1_2000_small_SL,
+                     ca_1_2000_medium_noSL, ca_1_2000_medium_SL,
+                     ca_1_2000_large_noSL, ca_1_2000_large_SL) %>%
+    #specify order for cov_set_size
+  mutate(cov_set_size = factor(cov_set_size, levels = c("small", "medium", "large")))
+
+
+write_xlsx(combined_all, path = here::here("graphs/combined/combined_all_ca_cont.xlsx"))
+
+```
+
+```{r specify axis maximums by simulation run and create euclidean_distance}
+
+  #specifying axis maximums (x and y both) and breaks by datasets
+  #update this when adding new datasets/outcomes
+  scenario_maximums = rbind(
+    data.frame(dataset = "ca", outcome_index = "1", max = 350, breaks = I(list(c(0,50,100,150,200, 250)))))
+
+  #define a function to make the euclidean_distance
+  make_euclidean_distance = function(max){
+    euclidean_distance =  expand.grid(x = seq (0, max, length.out=50),y = seq (0, max, length.out=50))
+    euclidean_distance$z = with(euclidean_distance, sqrt(x^2 + y^2))
+    return(euclidean_distance)
+}
+```
+
+```{r}
+
+df = combined_all
+df$set_id = paste( df$dataset, df$outcome_index, df$cov_set_size, df$train_set_size, sep="-" )
+
+ALL_MODELS <- unique( df$model )
+
+
+no_core <- function( df_set ) {
+  #df_set %>% filter( !model %in% c( "ATE", "OLS S", "LASSO INF", "RF INF" ) )
+  df_set %>% filter( !baseline )
+}
+only_core <- function( df_set ) {
+  #df_set %>% filter( model %in% c( "ATE", "OLS S", "LASSO INF", "RF INF" ) )
+  df_set %>% filter( baseline )
+}
+
+
+
+# Function to make RMSE contour plots ----
+
+TYPE_SHAPE_MAP <- c(
+  "ATE" = 20, "OLS S" = 18, 
+  "INF" = 2, "RF" = 3, "CDML" = 8,
+  "LASSO" = 10, "SL" = 16,
+  "XGBOOST" = 1, "BART" = 0
+)
+
+TYPE_COLOR_MAP <- c(
+  "ATE" = "black", "OLS S" = "black", 
+  "INF" = "darkgrey", "RF" = "#E69F00", "CDML" = "#F0E442",
+  "LASSO" = "#009E73", "SL" = "#D55E00",
+  "XGBOOST" = "#CC79A7", "BART" = "#0072B2" # "#56B4E9"
+)
+LEGEND_COLORS = setdiff( names(TYPE_COLOR_MAP), c("LASSO INF", "RF INF", "ATE", "OLS S") )
+
+# For individual methods
+SHAPE_MAP <- c(
+  "ATE" = 0, "OLS S" = 1, 
+  "RF INF" = 2, "RF T" = 3, "RF MOM IPW" = 4, "RF MOM DR" = 5, 
+  "CF" = 6, "CF LC" = 7, "CDML" = 8, "LASSO INF" = 9, "LASSO T" = 10, "LASSO MOM IPW" = 11, 
+  "LASSO MOM DR" = 12, "LASSO MCM" = 13, "LASSO MCM EA" = 14, "LASSO R" = 15, 
+  "SL T" = 16, "SL S" = 17, "XGBOOST S" = 18, "XGBOOST R" = 19, "BART T" = 20, "BART S" = 21
+)
+
+old_type_shape_map <- c(
+  "ATE" = 18, "OLS S" = 20, "INF" = 2, "RF" = 3, "CDML" = 8,  "LASSO" = 10, "SL" = 16, "XGBOOST" = 0, "BART" = 1
+)
+old_shape_map <- c(
+  "ATE" = 0, "OLS S" = 1, "RF INF" = 2, "RF T" = 3, "RF MOM IPW" = 4, "RF MOM DR" = 5, 
+  "CF" = 6, "CF LC" = 7, "CDML" = 8, "LASSO INF" = 9, "LASSO T" = 10, "LASSO MOM IPW" = 11, 
+  "LASSO MOM DR" = 12, "LASSO MCM" = 13, "LASSO MCM EA" = 14, "LASSO R" = 15, 
+  "SL T" = 16, "SL S" = 17, "XGBOOST S" = 18, "XGBOOST R" = 19, "BART T" = 20, "BART S" = 21
+)
+
+contour_plot_base <- function( max_bias ,
+                               max_se ,
+                               breaks) {
+  
+  euclidean_distance = expand.grid(x = seq( 0, 1.1*max_bias, length.out=100 ),
+                                   y = seq(0, 1.1*max_se, length.out=100 ) )
+  
+  euclidean_distance$z = with(euclidean_distance, sqrt(x^2 + y^2))
+  
+  plot_base <- list( 
+    geom_contour(
+      data = euclidean_distance,
+      aes(x = x, y = y, z = z),
+      breaks = breaks 
+    ),
+    theme_minimal(),
+    theme(
+      plot.background = element_rect(fill = "white", color = NA),
+      panel.background = element_rect(fill = "white", color = NA),
+      text = element_text(color = "black"),
+      plot.title = element_text(size = 16),
+      plot.subtitle = element_text(size = 12),
+      axis.title = element_text(size = 14),
+      legend.title = element_text(size = 14),
+      legend.text = element_text(size = 12)
+    ),
+    labs(
+      title = "Bias and SE, averaged across Queens",
+      subtitle = "* ATE queen is excluded",
+      col = "Model Type",
+      y = "Bias",     # Change X-axis title
+      x = "SE" ),     # Change Y-axis title
+    scale_shape_manual(values = TYPE_SHAPE_MAP),
+    scale_color_manual(values = TYPE_COLOR_MAP, breaks = LEGEND_COLORS),
+    guides(color = guide_legend(title = "Model Type"),
+           shape = guide_legend(title = "Model Type")),
+    coord_fixed()
+  )
+  plot_base
+}
+
+
+make_contour_plot <- function( df_set,
+                               max_bias ,
+                               max_se ,
+                               breaks,
+                               add_labels = TRUE ) {
+  
+  p <- ggplot( df_set, aes(se, bias, xmax=max_se, ymax=max_bias) ) +
+    geom_point(aes(color = type, shape = type),  size = 4 ) + 
+    contour_plot_base( max_bias = max_bias, max_se = max_se , breaks= breaks)
+  
+  if ( add_labels ) {
+    p <- p +
+      ggrepel::geom_label_repel(
+        aes(label = modelshort, col = type),
+        size = 3, # Increased label size
+        box.padding = 0.75,
+        point.padding = 0.25,
+        max.overlaps = Inf,
+        show.legend = FALSE
+      )
+    
+  }
+  
+  p
+}
+
+
+```
+
+
+
+
+
+```{r create scenario_plot, include=FALSE}
+# Contours for RMSE
+
+# Mean of all queens that are already aggregated excluding ATE
+df_agg = df %>%
+                filter(!(queen %in% c("ATE", "LASSO MCM EA")), ,
+                       !(model %in% c("SL S", "SL T", "XGBOOST S", "XGBOOST R"))) %>% 
+                group_by(set_id, dataset, outcome_index, cov_set_size, train_set_size,
+            model, type, modelshort) %>%
+                summarise(bias = mean(bias),
+                          SE = mean(se),
+                          RMSE = mean(rmse),
+                          .groups = "drop")
+
+
+# Update naming and tags for clarity and shorter names ----
+
+# Keep ATE and OLS as baseline, and drop labels for the baseline models
+df_agg <- mutate( df_agg,
+                  baseline = model %in% c( "ATE", "OLS S", "LASSO INF", "RF INF" ),
+                  modelshort = ifelse( baseline, "", modelshort ) )
+
+
+table( df_agg$modelshort )
+
+df_agg$modelshort <- str_replace( df_agg$modelshort, "MOM ", "" )
+df_agg$modelshort <- str_replace( df_agg$modelshort, "CF LC", "CF-LC" )
+df_agg$modelshort <- str_replace( df_agg$modelshort, "MCM EA", "EA" )
+
+table( df_agg$modelshort )
+
+
+# Function to subset to baseline models or main models ----
+
+
+no_core <- function( df_set ) {
+  #df_set %>% filter( !model %in% c( "ATE", "OLS S", "LASSO INF", "RF INF" ) )
+  df_set %>% filter( !baseline )
+}
+only_core <- function( df_set ) {
+  #df_set %>% filter( model %in% c( "ATE", "OLS S", "LASSO INF", "RF INF" ) )
+  df_set %>% filter( baseline )
+}
+#make a plot for a given scenario 
+scenario_plot = function(scen_dataset, scen_outcome_index, scen_train_set_size, scen_cov_set_size){
+  
+  usedata = df_agg %>%
+  filter(dataset ==scen_dataset)%>%
+  filter(outcome_index ==scen_outcome_index)%>%
+  filter(cov_set_size ==scen_cov_set_size)%>%
+  filter(train_set_size ==scen_train_set_size)
+  
+  scen_max = scenario_maximums%>%filter(dataset == scen_dataset & outcome_index == scen_outcome_index)%>% select(max) %>% unlist()
+  max_bias = scen_max
+  max_se = scen_max
+  breaks = unlist(scenario_maximums%>%filter(dataset == scen_dataset & outcome_index == scen_outcome_index)%>% select(breaks))
+
+  #use scen_max to create euclidean_distance
+  euclidean_distance=make_euclidean_distance(scen_max)
+
+#create the plot itself
+p <- ggplot(usedata, aes(SE, bias, xmax=scen_max, ymax=scen_max)) +
+  geom_contour(
+    data = euclidean_distance,
+    aes(x = x, y = y, z = z),
+    breaks = c(breaks),
+    alpha = 0.6
+  ) +
+  geom_point(aes(color = type, shape=type),  size = 4) +
+  geom_label_repel(
+    aes(label = modelshort, col = type),
+    size = 3, # Increased label size
+    box.padding = 0.75,
+    point.padding = 0.25,
+    max.overlaps = Inf,
+    show.legend = FALSE
+  ) +
+  scale_x_continuous(limits=c(0,scen_max))+
+  theme_minimal() +
+  theme(
+    plot.background = element_rect(fill = "white", color = NA),
+    panel.background = element_rect(fill = "white", color = NA),
+    text = element_text(color = "black"),
+    plot.title = element_text(size = 16),
+    plot.subtitle = element_text(size = 12),
+    axis.title = element_text(size = 14),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 12)
+  ) +
+  labs(
+    title = "Mean of Aggregated Bias and SE across Queens\nfor Each Algorithm with RMSE Contouring",
+    subtitle = "* ATE queen is excluded",
+    col = "Model Type"
+  ) +
+  ylab("Bias") +    # Change X-axis title
+  xlab("SE")  +     # Change Y-axis title
+  scale_shape_manual(values = TYPE_SHAPE_MAP) +
+  guides(color = guide_legend(title = "Model Type"),
+         shape = guide_legend(title = "Model Type"))
+
+  print(p)
+  
+  
+  #START
+gbs = filter( usedata, model %in% c( "ATE", "OLS S", "LASSO INF", "RF INF" ) )
+gbs$model
+
+p1C <- ggplot( no_core( usedata ), aes(se, bias, xmax=scen_max, ymax=scen_max) ) +
+  contour_plot_base( max_bias = max_bias, max_se = max_se , breaks = breaks) +
+  geom_point(aes(color = type), size = 4, shape=19 ) +
+  scale_x_continuous(limits=c(0,scen_max))+
+  scale_y_continuous(limits=c(0,scen_max))+
+  geom_point( data = gbs, aes(pch=model), col="darkgrey", fill="darkgrey", size=4 ) +
+#  geom_point( data = gbs, size = 7, shape = 1, col="red" ) +
+  scale_shape_manual(breaks = c( "ATE", "OLS S", "LASSO INF", "RF INF" ),
+                     values = c( 15, 23, 25, 24 ) ) +
+  guides(color = guide_legend(title = "Model Type"),
+         shape = guide_legend(title = "Reference") )+
+  theme(legend.position = "right",
+        legend.justification = "bottom",
+        legend.box.just = "left")
+
+p1C
+
+
+p1D = p1C + ggrepel::geom_text_repel(
+  aes(label = modelshort, col = type),
+  size = 3, # Increased label size
+  max.overlaps = Inf,
+  min.segment.length = Inf,
+  show.legend = FALSE
+)
+
+#ggsave( here::here(paste(sep="_", "graphs/combined/v2meanqueens",scen_dataset, scen_outcome_index, scen_train_set_size, scen_cov_set_size, ".png") ), p1D, width = 8, height = 6 , units = "in", bg = 'white')
+
+#ggsave(here::here(paste(sep="_", "graphs/combined/meanqueens",scen_dataset, scen_outcome_index, scen_train_set_size, scen_cov_set_size, ".png")), p, width = 8, height = 6, units = "in", bg = 'white', limitsize=FALSE)
+
+
+#ggsave(here::here(paste(sep="_", "graphs/combined/cleanmeanqueens",scen_dataset, scen_outcome_index, scen_train_set_size, scen_cov_set_size, ".png")), p, width = 8, height = 6, units = "in", bg = 'white', limitsize=FALSE)
+
+
+}
+
+
+```
+
+# Figures 
+
+## Means across queens 
+
+### CA continuous, small covariate set, train set = 1000
+
+```{r run scenario_plot 1}
+
+
+df_agg$se = df_agg$SE
+scenario_plot(scen_dataset="ca", scen_outcome_index = "1", scen_train_set_size = "1000", scen_cov_set_size = "small")
+```
+
+### CA continuous, medium covariate set, train set = 1000
+
+```{r  run scenario_plot 2}
+scenario_plot(scen_dataset="ca", scen_outcome_index = "1", scen_train_set_size = "1000", scen_cov_set_size = "medium")
+```
+
+### CA continuous, large covariate set, train set = 1000
+
+#### NOTE: this removed CDML
+
+```{r  run scenario_plot 3}
+scenario_plot(scen_dataset="ca", scen_outcome_index = "1", scen_train_set_size = "1000", scen_cov_set_size = "large")
+
+```
+
+### CA continuous, small covariate set, train set =2000
+
+```{r  run scenario_plot 4}
+scenario_plot(scen_dataset="ca", scen_outcome_index = "1", scen_train_set_size = "2000", scen_cov_set_size = "small")
+
+```
+
+### CA continuous, medium covariate set, train set = 2000
+
+```{r  run scenario_plot 5}
+
+scenario_plot(scen_dataset="ca", scen_outcome_index = "1", scen_train_set_size = "2000", scen_cov_set_size = "medium")
+```
+
+### CA continuous, large covariate set, train set = 2000
+
+```{r  run scenario_plot 6}
+scenario_plot(scen_dataset="ca", scen_outcome_index = "1", scen_train_set_size = "2000", scen_cov_set_size = "large")
+
+```
+
+
+
+## Stacked mini plots for CA outcome 1
+
+```{r stack miniplots}
+
+#set scen_max for ca outcome 1
+  scen_max = scenario_maximums%>%filter(dataset == "ca"  & outcome_index == "1")%>% select(max) %>% unlist()
+
+  #use scen_max to create euclidean_distance
+  euclidean_distance=make_euclidean_distance(scen_max)
+  
+# Adjusting your plot
+# Define shapes for each model type
+
+train_size_shape_map = c("1000"=9, "2000"=2)
+cov_set_size_color_map = c("small"="blue", "medium"="orange", "large" = "#696969")
+usedata = df_agg %>%
+  filter(dataset =="ca" & outcome_index ==1)
+
+p <- ggplot(usedata, aes(SE, bias, xmax=250, ymax=250, breaks=100)) +
+  geom_contour(
+    data = euclidean_distance,
+    aes(x = x, y = y, z = z),
+    breaks = c(50, 100, 150, 200, 250),
+    alpha = 0.6
+  ) +
+  geom_point(aes(color =cov_set_size, shape=train_set_size ),  size = 2)  +
+  facet_wrap(~ model) +  # Add facet_wrap 
+  theme_minimal() +
+  scale_x_continuous(limits=c(0,350), breaks=c(0,100, 200))+
+  scale_y_continuous(breaks=c(0,100, 200))+
+  theme(
+    plot.background = element_rect(fill = "white", color = NA),
+    panel.background = element_rect(fill = "white", color = NA),
+    text = element_text(color = "black"),
+    plot.title = element_text(size = 12),
+    plot.subtitle = element_text(size = 12),
+    axis.title = element_text(size = 14),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 12),
+    strip.text = element_text(size =8),
+    axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)
+  ) +
+  labs(
+    title = "Mean of Aggregated Bias and SE across Queens\nby Algorithm with RMSE Contouring",
+    subtitle = "* ATE queen is excluded",
+    col = "Scenario"
+  ) +
+  ylab("Bias") +    # Change X-axis title
+  xlab("SE")  +     # Change Y-axis title
+  scale_color_manual(values=cov_set_size_color_map)+
+  scale_shape_manual(values = train_size_shape_map) +
+  guides(color = guide_legend(title = "Covariate Set Size"),
+         shape = guide_legend(title = "Train Set Size"))
+
+p
+
+# ggsave(here::here(paste0("graphs/combined/stackminiplots.png")), p, width = 8, height = 6, units = "in", bg = 'white', limitsize=FALSE)
+```
+## ATE and CDML queens only
+
+```{r ATE/CDML queen plots}
+# Adjusting your plot
+usedata = combined_all %>%
+  filter(dataset =="ca") %>%
+  filter(outcome_index ==1) %>%
+  filter(queen %in% c("ATE", "CDML"))
+
+usedata$queensize = paste0(usedata$queen, ", ", usedata$train_set_size)
+combined_shape_map = c("ATE, 1000"=0, "ATE, 2000"=1, "CDML, 1000" = 15, "CDML, 2000"=16)
+cov_set_size_color_map = c("small"="blue", "medium"="orange", "large" = "#696969")
+
+
+  scen_max = scenario_maximums%>%filter(dataset == "ca" & outcome_index == "1")%>% select(max) %>% unlist()
+  
+  #use scen_max to create euclidean_distance
+  euclidean_distance=make_euclidean_distance(scen_max)
+
+  p <- ggplot(usedata, aes(se, bias, xmax=250, ymax=250, breaks=100)) +
+  geom_contour(
+    data = euclidean_distance,
+    aes(x = x, y = y, z = z),
+    breaks = c(50, 100, 150, 200, 250),
+    alpha = 0.6
+  ) +
+  geom_point(aes(color =cov_set_size, shape=queensize ),  size = 2)  +
+  facet_wrap(~ model) +  # Add facet_wrap 
+  theme_minimal() +
+  scale_x_continuous(limits=c(0,350), breaks=c(0,100, 200))+
+  scale_y_continuous(breaks=c(0,100, 200))+
+  theme(
+    plot.background = element_rect(fill = "white", color = NA),
+    panel.background = element_rect(fill = "white", color = NA),
+    text = element_text(color = "black"),
+    plot.title = element_text(size = 12),
+    plot.subtitle = element_text(size = 12),
+    axis.title = element_text(size = 14),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 12),
+    strip.text = element_text(size =8),
+    axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)
+  ) +
+  labs(
+    title = "Aggregated Bias and SE\nby Algorithm with RMSE Contouring",
+    subtitle = "ATE and CDML queens only",
+    col = "Scenario"
+  ) +
+  ylab("Bias") +    # Change X-axis title
+  xlab("SE")  +     # Change Y-axis title
+  scale_color_manual(values = cov_set_size_color_map) +
+  scale_shape_manual(values = combined_shape_map) +
+  guides(color = guide_legend(title = "Covariate Set Size"),
+         shape = guide_legend(title = "Train Set Size"))
+
+p
+
+# ggsave(here::here(paste0("graphs/combined/ATECDMLonly.png")), p, width = 8, height = 6, units = "in", bg = 'white', limitsize=FALSE)
+```
+
+## All queens
+
+```{r create scenario_allqueens}
+
+#create scenario_allqueens function: plot the results from each queen for a given model and scenario 
+scenario_allqueens = function(scen_dataset, scen_outcome_index, scen_train_set_size, scen_cov_set_size){ 
+
+  scen_max = scenario_maximums%>%filter(dataset == scen_dataset & outcome_index == scen_outcome_index)%>% select(max) %>% unlist()
+  max_bias = scen_max
+  max_se = scen_max
+  breaks = unlist(scenario_maximums%>%filter(dataset == scen_dataset & outcome_index == scen_outcome_index)%>% select(breaks))
+
+  #use scen_max to create euclidean_distance
+  euclidean_distance=make_euclidean_distance(scen_max)
+  
+  usedata = combined_all[(combined_all$dataset ==scen_dataset & combined_all$outcome_index ==scen_outcome_index  & combined_all$train_set_size==scen_train_set_size & combined_all$cov_set_size == scen_cov_set_size),]
+  p <- ggplot(usedata, aes(se, bias, xmax=scen_max, ymax=scen_max)) +
+    geom_contour(
+      data = euclidean_distance,
+      aes(x = x, y = y, z = z),
+      breaks = breaks,
+      alpha = 0.6
+    ) +
+    geom_point(aes(color = queen, shape=queen),  size = 2) +
+    scale_x_continuous(limits=c(0,scen_max))+
+    scale_y_continuous(limits=c(0,scen_max))+ #adding this to remove some outlier CDML
+    facet_wrap(~model) +
+    theme_minimal() +
+    theme(
+      plot.background = element_rect(fill = "white", color = NA),
+      panel.background = element_rect(fill = "white", color = NA),
+      text = element_text(color = "black"),
+      plot.title = element_text(size = 16),
+      plot.subtitle = element_text(size = 12),
+      axis.title = element_text(size = 14),
+      legend.title = element_text(size = 14),
+      legend.text = element_text(size = 12),
+    strip.text = element_text(size =8),
+    axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)
+    ) +
+    labs(
+      title = "Aggregated Bias and SE by Queen\nfor Each Scenario with RMSE Contouring"
+    ) +
+    ylab("Bias") +    # Change X-axis title
+    xlab("SE")  +     # Change Y-axis title
+    scale_shape_manual(values = SHAPE_MAP) +
+    guides(color = guide_legend(title = "Queen"),
+           shape = guide_legend(title = "Queen"))
+  
+  print(p)
+    
+# ggsave(here::here(paste(sep="_","graphs/combined/allqueens",scen_dataset, scen_outcome_index, scen_train_set_size, scen_cov_set_size, ".png")), p, width = 8, height = 6, units = "in", bg = 'white', limitsize=FALSE)
+}
+```
+
+### CA continuous, small covariate set, train set = 1000
+
+```{r run scenario_allqueens 1}
+scenario_allqueens(scen_dataset="ca", scen_outcome_index = "1", scen_train_set_size = "1000", scen_cov_set_size = "small")
+```
+
+### CA continuous, medium covariate set, train set = 1000
+
+```{r run scenario_allqueens 2}
+scenario_allqueens(scen_dataset="ca", scen_outcome_index = "1", scen_train_set_size = "1000", scen_cov_set_size = "medium")
+```
+
+### CA continuous, large covariate set, train set = 1000
+
+```{r run scenario_allqueens 3}
+scenario_allqueens(scen_dataset="ca", scen_outcome_index = "1", scen_train_set_size = "1000", scen_cov_set_size = "large")
+
+```
+
+### CA continuous, small covariate set, train set =2000
+
+```{r run scenario_allqueens 4}
+scenario_allqueens(scen_dataset="ca", scen_outcome_index = "1", scen_train_set_size = "2000", scen_cov_set_size = "small")
+
+```
+
+### CA continuous, medium covariate set, train set = 2000
+
+```{r run scenario_allqueens 5}
+
+scenario_allqueens(scen_dataset="ca", scen_outcome_index = "1", scen_train_set_size = "2000", scen_cov_set_size = "medium")
+```
+
+### CA continuous, large covariate set, train set = 2000
+
+```{r run scenario_allqueens 6}
+scenario_allqueens(scen_dataset="ca", scen_outcome_index = "1", scen_train_set_size = "2000", scen_cov_set_size = "large")
+
+```
+
+### ASAP continuous, small covariate set, train set = 1000
+
+#### CDML dropped here because bias = ~50
+```{r run scenario_allqueens 7}
+scenario_allqueens(scen_dataset="asap", scen_outcome_index = "2", scen_train_set_size = "1000", scen_cov_set_size = "small")
+
+```
+
+### CA binary, small covariate set, train set = 1000
+
+```{r}
+
+scenario_allqueens(scen_dataset="ca", scen_outcome_index = "2", scen_train_set_size = 1000, scen_cov_set_size = "small")
+
+```
+
+### Figures from Luke 
+
+```{r figures from Luke}
+
+# Make contour plot ----
+df_agg$se = df_agg$SE
+df_set_1 <- filter( df_agg, set_id == "ca-1-large-1000" )
+df_set_2 <- filter( df_agg, set_id == "ca-1-large-2000" )
+
+#max_bias = max( df_set_1$bias, df_set_2$bias )
+#max_se = max( df_set_1$se, df_set_2$se )
+  scen_max = scenario_maximums%>%filter(dataset == "ca" & outcome_index == "1")%>% select(max) %>% unlist()
+  max_bias = scen_max
+  max_se = scen_max
+  breaks = unlist(scenario_maximums%>%filter(dataset == "ca" & outcome_index == "1")%>% select(breaks))
+
+
+p1 <- make_contour_plot( df_set_1, max_bias=max_bias, max_se=max_se , breaks = breaks)
+p1
+
+p2 <- make_contour_plot( df_set_2, max_bias=max_bias, max_se = max_se, breaks = breaks )
+p2
+
+
+
+# Alternate labeling approaches? ----
+
+p1B <- make_contour_plot( df_set_1, max_bias=max_bias, max_se=max_se, breaks = breaks, add_labels = FALSE )
+p1B + ggrepel::geom_text_repel(
+  aes(label = modelshort, col = type),
+  size = 2, # Increased label size
+  max.overlaps = Inf,
+  show.legend = FALSE
+)
+
+
+gbs = filter( df_set_1, model %in% c( "ATE", "OLS S", "LASSO INF", "RF INF" ) )
+gbs$model
+
+p1C <- ggplot( no_core( df_set_1 ), aes(se, bias, xmax=max_se, ymax=max_bias) ) +
+  contour_plot_base( max_bias = max_bias, max_se = max_se , breaks = breaks) +
+  geom_point(aes(color = type), size = 4, shape=19 ) +
+  geom_point( data = gbs, aes(pch=model), col="darkgrey", fill="darkgrey", size=4 ) +
+#  geom_point( data = gbs, size = 7, shape = 1, col="red" ) +
+  scale_shape_manual(breaks = c( "ATE", "OLS S", "LASSO INF", "RF INF" ),
+                     values = c( 15, 23, 25, 24 ) ) +
+  guides(color = guide_legend(title = "Model Type"),
+         shape = guide_legend(title = "Reference") )
+p1C
+
+
+p1C + ggrepel::geom_text_repel(
+  aes(label = modelshort, col = type),
+  size = 3, # Increased label size
+  max.overlaps = Inf,
+  min.segment.length = Inf,
+  show.legend = FALSE
+)
+
+#ggsave( here::here( "graphs/possible_clean_plot_1.pdf" ) )
+
+
+
+
+if ( FALSE ) {
+  # This isn't working
+  
+# Trying out animation ----
+
+library(ggplot2)
+library(gganimate)
+
+df_range = bind_rows( set1 = df_set_1, set2 = df_set_2, .id = "set" ) %>%
+ # dplyr::select( -n, -rmse ) %>%
+  group_by( model, type, modelshort )
+
+# Plot and animate
+
+p <- ggplot( df_range, aes(se, bias, xmax=max_se, ymax=max_bias) ) +
+  geom_point(aes(color = type, shape=type),  size = 4)  +
+  transition_states( set, transition_length = 2, state_length = 1, wrap=FALSE) +
+  ease_aes('linear') +
+  labs(title = "Scenario: {closest_state}") +
+  contour_plot_base( max_bias = max_bias, max_se = max_se , breaks = breaks ) +
+  theme( legend.position = "none" )
+
+p
+
+
+anim <- animate(p, duration = 5, fps = 10, width = 600, height = 400)
+
+gganimate::anim_save( here::here( "graphs/initial_animation.gif") )
+
+
+
+  # Extract the first frame
+  first_frame <- anim::anim_save(anim, start_pause = 1, nframes = 1)
+  
+  # Extract the last frame
+  last_frame <- anim_save(anim, end_pause = 1, nframes = 1)
+  
+  # Add labels to the first frame
+  first_frame_labeled <- ggplot_build(first_frame) +
+    ggrepel::geom_label_repel(
+      aes( label = after_stat(ifelse(set %in% c("set1", "set2"), modelshort, NA)), color = type),
+      size = 3, # Increased label size
+      box.padding = 0.75,
+      point.padding = 0.25,
+      max.overlaps = Inf,
+      show.legend = FALSE
+    )   
+  
+  geom_label_repel(aes(label = modelshort, color = type), size = 5)
+  
+  # Add labels to the last frame
+  last_frame_labeled <- ggplot_build(last_frame) +
+    geom_label_repel(aes(label = modelshort, color = type), size = 5)
+  
+  # You can now save or display these labeled frames
+#  ggsave("first_frame_with_labels.png", plot = first_frame_labeled)
+#  ggsave("last_frame_with_labels.png", plot = last_frame_labeled)
+  
+  
+  
+  
+}
+
+
+# "Trails from last plot" plot ----
+
+d_b = df_set_2 %>%
+  ungroup() %>%
+  dplyr::select( -c( set_id:train_set_size ) ) %>%
+  left_join( dplyr::select( ungroup( df_set_1 ), model, bias, se ), 
+             by = "model",
+             suffix = c( "", "old" ) )
+
+
+plt <-  ggplot( d_b, aes(se, bias, xmax=max_se, ymax=max_bias) ) +
+  geom_segment(aes(x = seold, y = biasold, xend = se, yend = bias),
+               arrow = arrow(length = unit(0.2, "cm")), lwd = 1, col="darkgrey") +
+  geom_point(aes(color = type, shape=type, size = as.numeric(3+1*baseline) ), fill="grey" ) + 
+  contour_plot_base( max_bias = max_bias, max_se = max_se , breaks = breaks) +
+  labs( title = "Trails of Models from 1000 to 2000" ) + 
+  scale_size_identity() +
+  guides( size="none" )
+plt
+
+
+# A second version
+
+pltB <-  ggplot( d_b, aes(se, bias, xmax=max_se, ymax=max_bias) ) +
+  #geom_point(aes(color = type, shape=type, size = as.numeric(4+2*baseline) ), fill="grey" ) + 
+  geom_segment(aes(x = seold, y = biasold, xend = se, yend = bias),
+               arrow = arrow(length = unit(0.2, "cm")), lwd = 1, col="lightgrey") +
+  geom_point( data = no_core( d_b ), aes(color = type), size = 4, shape=19 ) +
+  geom_point( data = only_core( d_b ), aes(pch=model), col="darkgrey", fill="darkgrey", size=4 ) +
+  contour_plot_base( max_bias = max_bias, max_se = max_se , breaks = breaks ) +
+  labs( title = "Trails of Models from 1000 to 2000" ) + 
+  scale_size_identity() +
+  scale_shape_manual(breaks = c( "ATE", "OLS S", "LASSO INF", "RF INF" ),
+                     values = c( 15, 23, 25, 24 ) ) +
+  guides(color = guide_legend(title = "Model Type"),
+         shape = guide_legend(title = "Reference"),
+         size="none" )
+pltB
+
+
+pltB + ggrepel::geom_text_repel(
+  aes(label = modelshort, col = type),
+  size = 3, # Increased label size
+  max.overlaps = Inf,
+  min.segment.length = Inf,
+  show.legend = FALSE
+)
+
+pltB
+
+#ggsave( here::here( "graphs/possible_clean_plot_2.pdf"))

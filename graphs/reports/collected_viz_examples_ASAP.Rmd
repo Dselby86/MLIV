@@ -1,0 +1,241 @@
+---
+title: "A Collection of Different Functions to Display ASAP Simulation Results"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    df_print: paged
+    fig_caption: yes
+    fig_height: 8
+    fig_width: 10
+    highlight: pygments
+    theme: spacelab
+    toc: yes
+    toc_depth: 6
+    toc_float: yes
+  pdf_document:
+    toc: yes
+    toc_depth: '6'
+editor_options:
+  markdown:
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+
+library(writexl)
+knitr::opts_chunk$set( echo = TRUE )
+```
+
+# Set up
+
+```{r source previous script,  include=FALSE}
+# Load script 08
+source(here::here("simulation_pipeline/08_run_simulation.R"))
+```
+
+```{r run read_and_aggregate}
+#NC 12-2-24: this code is now in  a separate combining script, just loading the file now
+#combined_all = read.xlsx(here::here("graphs/combined/combined_all.xlsx"))
+combined_all = read.xlsx(here::here("graphs/combined/master_aggregated_CATE.xlsx"))
+
+```
+
+```{r specify axis maximums by simulation run and create euclidean_distance}
+
+  #specifying axis maximums (x and y both) and breaks by datasets
+  #update this when adding new datasets/outcomes
+  #TODO: may need to change these depending on future simulation results
+  scenario_maximums = rbind(
+    data.frame(dataset = "asap", outcome = "X16BTMCRET", max = 1.2, max_bias = 1.2, max_se = 1.2, breaks = I(list(c(0,.2,.4,.6,.8, 1))),max_agg = .35, max_bias_agg = .35, max_se_agg = .35, breaks_agg = I(list(c(0,.1,.2,.3)))),
+    data.frame(dataset = "asap", outcome = "C16BMVDEG", max = 1, max_bias = 1, max_se = 1, breaks = I(list(c(0,.2,.4,.6,.8))),max_agg = 1, max_bias_agg = 1, max_se_agg = 1, breaks_agg = I(list(c(0,.2,.4,.6,.8)))))
+
+```
+
+```{r define df and shape maps}
+
+all_scenarios = combined_all
+df = combined_all
+all_scenarios$set_id = paste( df$dataset, df$outcome, df$cov_set_size, df$train_set_size, sep="-" )
+
+ALL_MODELS <- unique( all_scenarios$model )
+
+TYPE_SHAPE_MAP <- c(
+  "ATE" = 20, "OLS S" = 18, 
+  "INF" = 2, "RF" = 3, "CDML" = 8,
+  "LASSO" = 10, "SL" = 16,
+  "XGBOOST" = 1, "BART" = 0
+)
+
+TYPE_COLOR_MAP <- c(
+  "ATE" = "black", "OLS S" = "black", 
+  "INF" = "darkgrey", "RF" = "#E69F00", "CDML" = "#F0E442",
+  "LASSO" = "#009E73", "SL" = "#D55E00",
+  "XGBOOST" = "#CC79A7", "BART" = "#0072B2" # "#56B4E9"
+)
+LEGEND_COLORS = setdiff( names(TYPE_COLOR_MAP), c("LASSO INF", "RF INF", "ATE", "OLS S") )
+
+# For individual methods
+SHAPE_MAP <- c(
+  "ATE" = 0, "OLS S" = 1, 
+  "RF INF" = 2, "RF T" = 3, "RF MOM IPW" = 4, "RF MOM DR" = 5, 
+  "CF" = 6, "CF LC" = 7, "CDML" = 8, "LASSO INF" = 9, "LASSO T" = 10, "LASSO MOM IPW" = 11, 
+  "LASSO MOM DR" = 12, "LASSO MCM" = 13, "LASSO MCM EA" = 14, "LASSO R" = 15, 
+  "SL T" = 16, "SL S" = 17, "XGBOOST S" = 18, "XGBOOST R" = 19, "BART T" = 20, "BART S" = 21
+)
+
+old_type_shape_map <- c(
+  "ATE" = 18, "OLS S" = 20, "INF" = 2, "RF" = 3, "CDML" = 8,  "LASSO" = 10, "SL" = 16, "XGBOOST" = 0, "BART" = 1
+)
+old_shape_map <- c(
+  "ATE" = 0, "OLS S" = 1, "RF INF" = 2, "RF T" = 3, "RF MOM IPW" = 4, "RF MOM DR" = 5, 
+  "CF" = 6, "CF LC" = 7, "CDML" = 8, "LASSO INF" = 9, "LASSO T" = 10, "LASSO MOM IPW" = 11, 
+  "LASSO MOM DR" = 12, "LASSO MCM" = 13, "LASSO MCM EA" = 14, "LASSO R" = 15, 
+  "SL T" = 16, "SL S" = 17, "XGBOOST S" = 18, "XGBOOST R" = 19, "BART T" = 20, "BART S" = 21
+)
+
+
+```
+
+
+
+
+
+```{r aggregate to all_scenarios_agg excl ATE, include=FALSE}
+# Mean of all queens that are already aggregated excluding ATE
+all_scenarios_agg = all_scenarios %>%
+                filter(!(queen %in% c("ATE")), ,
+                       !(model %in% c("SL S", "SL T", "XGBOOST S", "XGBOOST R"))) %>% 
+                group_by(set_id, dataset, outcome, cov_set_size, train_set_size,
+            model, type, modelshort) %>%
+                summarise(bias = mean(bias),
+                          SE = mean(se),
+                          RMSE = mean(rmse),
+                          percent_cut = mean(percent_cut),
+                          runtime = mean(runtime),
+                          .groups = "drop")
+
+all_scenarios_agg$se = all_scenarios_agg$SE
+# Update naming and tags for clarity and shorter names ----
+# Keep ATE and OLS as baseline, and drop labels for the baseline models
+all_scenarios_agg <- mutate( all_scenarios_agg,
+                  baseline = model %in% c( "ATE", "OLS S", "LASSO INF", "RF INF" ),
+                  modelshort = ifelse( baseline, "", modelshort ) )
+all_scenarios_agg$modelshort <- str_replace( all_scenarios_agg$modelshort, "MOM ", "" )
+all_scenarios_agg$modelshort <- str_replace( all_scenarios_agg$modelshort, "CF LC", "CF-LC" )
+all_scenarios_agg$modelshort <- str_replace( all_scenarios_agg$modelshort, "MCM EA", "EA" )
+
+table( all_scenarios_agg$modelshort )
+
+```
+
+# Figures 
+
+## An example of each kind of visualization
+
+## contour_onequeen (shown: asap_1_small_1000 for RF T queen)
+
+```{r example contour_onequeen}
+contour_onequeen(scen_dataset="asap", scen_outcome = "X16BTMCRET", scen_train_set_size = "1000", scen_cov_set_size = "small", plotqueen = "RF T")
+
+```
+
+## scenario_plot (shown: asap_2_small_1000)
+
+```{r run scenario_plot 1}
+scenario_plot(scen_dataset="asap", scen_outcome = "X16BTMCRET", scen_train_set_size = "1000", scen_cov_set_size = "small")
+```
+
+## Stacked mini plots for ASAP outcome 2
+
+```{r stack miniplots}
+
+stack_miniplots(scen_dataset= "asap", scen_outcome = "X16BTMCRET"
+               # , scen_train_set_size = "2000", scen_cov_set_size = "small"
+                )
+```
+## ATE and CDML queens only
+
+```{r ATE/CDML queen plots}
+plot_two_queens(scen_dataset= "asap", scen_outcome = "X16BTMCRET", queen1="ATE", queen2="CDML")
+
+```
+
+## continuous scenario_allqueens (shown: asap_2_small_1000)
+
+
+```{r exampl scenario_allqueens asap outcome 2}
+scenario_allqueens(scen_dataset="asap", scen_outcome = "X16BTMCRET", scen_train_set_size = "1000", scen_cov_set_size = "small")
+```
+## TODO: fix binary scenario_allqueens (shown: asap_1_small_1000) 
+
+```{r exampl scenario_allqueens 1}
+scenario_allqueens(scen_dataset="asap", scen_outcome = "C16BMVDEG", scen_train_set_size = "2000", scen_cov_set_size = "small")
+```
+
+## All queens, by estimator (note: CDML is off the chart to the right at 1)
+
+
+```{r bias boxplot}
+
+scenario_boxplot(scen_dataset="asap", scen_outcome = "X16BTMCRET", scen_train_set_size = "1000", scen_cov_set_size = "small", metric = "bias")
+
+```
+
+## Percent poorly estimated
+
+```{r percent poorly estimated}
+
+scenario_poorlyest(scen_dataset="asap", scen_outcome = "X16BTMCRET", scen_train_set_size = "1000", scen_cov_set_size = "small")
+
+```
+
+## Trail plot
+
+
+```{r trail plot}
+
+# Moving to large covariate set plot  ----
+
+
+scenario_trail(scen_dataset="asap", scen_outcome = "X16BTMCRET", 
+                   additional_filter_var = "cov_set_size",
+                   additional_filter_val = "small", 
+                   trail_var = "train_set_size",
+                   trail_val_from = 1000, 
+                   trail_val_to = 5000)
+
+```
+
+
+## Regression Plots
+
+### Coefficient Plot
+
+```{r coef_plot}
+cs = make_cs(all_scenarios,scen_dataset = "ca", scen_outcome="Y18JBERNA_06")
+coef_plot(cs)
+
+```
+
+
+### Coefficient Plot, Model Only
+
+```{r coef_plot 2}
+cs = make_cs(all_scenarios,scen_dataset = "ca", scen_outcome="Y18JBERNA_06")
+coef_plot(cs, plotOnly = "model")
+
+```
+
+### Ex Factor Plot, CA outcome 1
+```{r ex_factor_plot}
+
+c_coef = make_c_coef(all_scenarios, scen_dataset = "ca", scen_outcome="Y18JBERNA_06" )
+ex_factor_plot(c_coef)
+
+```
+
+
+## TO DO: not added yet
+### Animations
+### Others?
+

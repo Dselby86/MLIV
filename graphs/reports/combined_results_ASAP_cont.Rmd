@@ -1,0 +1,430 @@
+---
+title: "Combined Results Template - Work in Progress"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    df_print: paged
+    fig_caption: yes
+    fig_height: 8
+    fig_width: 10
+    highlight: pygments
+    theme: spacelab
+    toc: yes
+    toc_depth: 6
+    toc_float: yes
+  pdf_document:
+    toc: yes
+    toc_depth: '6'
+editor_options:
+  markdown:
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+
+library(writexl)
+knitr::opts_chunk$set( echo = TRUE )
+```
+
+# Set up
+
+```{r source previous script,  include=FALSE}
+# Load script 08
+source(here::here("simulation_pipeline/08_run_simulation.R"))
+```
+
+```{r run read_and_aggregate}
+#NC 12-2-24: this code is now in  a separate combining script, just loading the file now
+combined_all = read.xlsx(here::here("graphs/combined/combined_all.xlsx"))
+#combined_all = read.xlsx(here::here("graphs/combined/combined_all_asap_cont.xlsx"))
+
+```
+
+```{r specify axis maximums by simulation run and create euclidean_distance}
+
+  #specifying axis maximums (x and y both) and breaks by datasets
+  #update this when adding new datasets/outcomes
+  scenario_maximums = rbind(
+    data.frame(dataset = "asap", outcome_index = "2", max = 1.2, max_bias = 1.2, max_se = 1.2, breaks = I(list(c(0,.2,.4,.6,.8, 1))),max_agg = .35, max_bias_agg = .35, max_se_agg = .35, breaks_agg = I(list(c(0,.1,.2,.3)))),
+    data.frame(dataset = "asap", outcome_index = "1", max = 1, max_bias = 1, max_se = 1, breaks = I(list(c(0,.2,.4,.6,.8))),max_agg = 1, max_bias_agg = 1, max_se_agg = 1, breaks_agg = I(list(c(0,.2,.4,.6,.8)))))
+
+```
+
+```{r}
+
+df = combined_all
+df$set_id = paste( df$dataset, df$outcome_index, df$cov_set_size, df$train_set_size, sep="-" )
+
+ALL_MODELS <- unique( df$model )
+
+# Function to make RMSE contour plots ----
+
+TYPE_SHAPE_MAP <- c(
+  "ATE" = 20, "OLS S" = 18, 
+  "INF" = 2, "RF" = 3, "CDML" = 8,
+  "LASSO" = 10, "SL" = 16,
+  "XGBOOST" = 1, "BART" = 0
+)
+
+TYPE_COLOR_MAP <- c(
+  "ATE" = "black", "OLS S" = "black", 
+  "INF" = "darkgrey", "RF" = "#E69F00", "CDML" = "#F0E442",
+  "LASSO" = "#009E73", "SL" = "#D55E00",
+  "XGBOOST" = "#CC79A7", "BART" = "#0072B2" # "#56B4E9"
+)
+LEGEND_COLORS = setdiff( names(TYPE_COLOR_MAP), c("LASSO INF", "RF INF", "ATE", "OLS S") )
+
+# For individual methods
+SHAPE_MAP <- c(
+  "ATE" = 0, "OLS S" = 1, 
+  "RF INF" = 2, "RF T" = 3, "RF MOM IPW" = 4, "RF MOM DR" = 5, 
+  "CF" = 6, "CF LC" = 7, "CDML" = 8, "LASSO INF" = 9, "LASSO T" = 10, "LASSO MOM IPW" = 11, 
+  "LASSO MOM DR" = 12, "LASSO MCM" = 13, "LASSO MCM EA" = 14, "LASSO R" = 15, 
+  "SL T" = 16, "SL S" = 17, "XGBOOST S" = 18, "XGBOOST R" = 19, "BART T" = 20, "BART S" = 21
+)
+
+old_type_shape_map <- c(
+  "ATE" = 18, "OLS S" = 20, "INF" = 2, "RF" = 3, "CDML" = 8,  "LASSO" = 10, "SL" = 16, "XGBOOST" = 0, "BART" = 1
+)
+old_shape_map <- c(
+  "ATE" = 0, "OLS S" = 1, "RF INF" = 2, "RF T" = 3, "RF MOM IPW" = 4, "RF MOM DR" = 5, 
+  "CF" = 6, "CF LC" = 7, "CDML" = 8, "LASSO INF" = 9, "LASSO T" = 10, "LASSO MOM IPW" = 11, 
+  "LASSO MOM DR" = 12, "LASSO MCM" = 13, "LASSO MCM EA" = 14, "LASSO R" = 15, 
+  "SL T" = 16, "SL S" = 17, "XGBOOST S" = 18, "XGBOOST R" = 19, "BART T" = 20, "BART S" = 21
+)
+
+
+```
+
+
+
+
+
+```{r create scenario_plot, include=FALSE}
+
+
+all_scenarios = df
+
+# Mean of all queens that are already aggregated excluding ATE
+all_scenarios_agg = df %>%
+                filter(!(queen %in% c("ATE", "LASSO MCM EA")), ,
+                       !(model %in% c("SL S", "SL T", "XGBOOST S", "XGBOOST R"))) %>% 
+                group_by(set_id, dataset, outcome_index, cov_set_size, train_set_size,
+            model, type, modelshort) %>%
+                summarise(bias = mean(bias),
+                          SE = mean(se),
+                          RMSE = mean(rmse),
+                          .groups = "drop")
+
+
+all_scenarios_agg$se = all_scenarios_agg$SE
+# Update naming and tags for clarity and shorter names ----
+# Keep ATE and OLS as baseline, and drop labels for the baseline models
+all_scenarios_agg <- mutate( all_scenarios_agg,
+                  baseline = model %in% c( "ATE", "OLS S", "LASSO INF", "RF INF" ),
+                  modelshort = ifelse( baseline, "", modelshort ) )
+all_scenarios_agg$modelshort <- str_replace( all_scenarios_agg$modelshort, "MOM ", "" )
+all_scenarios_agg$modelshort <- str_replace( all_scenarios_agg$modelshort, "CF LC", "CF-LC" )
+all_scenarios_agg$modelshort <- str_replace( all_scenarios_agg$modelshort, "MCM EA", "EA" )
+
+table( all_scenarios_agg$modelshort )
+
+```
+
+# Figures 
+
+## Means across queens 
+
+### ASAP continuous, small covariate set, train set = 1000
+
+```{r run scenario_plot 1}
+
+
+
+scenario_plot(scen_dataset="asap", scen_outcome_index = "2", scen_train_set_size = "1000", scen_cov_set_size = "small")
+
+#all_scenarios_agg_save = all_scenarios_agg
+# all_scenarios_agg = all_scenarios_agg_[all_scenarios_agg_use$model=="ATE",]
+
+
+
+
+```
+
+### ASAP continuous, medium covariate set, train set = 1000
+
+```{r  run scenario_plot 2}
+scenario_plot(scen_dataset="asap", scen_outcome_index = "2", scen_train_set_size = "1000", scen_cov_set_size = "medium")
+```
+
+### ASAP continuous, large covariate set, train set = 1000
+
+#### NOTE: this removed CDML
+
+```{r  run scenario_plot 3}
+scenario_plot(scen_dataset="asap", scen_outcome_index = "2", scen_train_set_size = "1000", scen_cov_set_size = "large")
+```
+
+### ASAP continuous, small covariate set, train set =2000
+
+```{r  run scenario_plot 4}
+scenario_plot(scen_dataset="asap", scen_outcome_index = "2", scen_train_set_size = "2000", scen_cov_set_size = "small")
+
+```
+
+### ASAP continuous, medium covariate set, train set = 2000
+
+```{r  run scenario_plot 5}
+scenario_plot(scen_dataset="asap", scen_outcome_index = "2", scen_train_set_size = "2000", scen_cov_set_size = "medium")
+```
+
+### ASAP continuous, large covariate set, train set = 2000
+
+```{r  run scenario_plot 6}
+scenario_plot(scen_dataset="asap", scen_outcome_index = "2", scen_train_set_size = "2000", scen_cov_set_size = "large")
+```
+
+
+
+## Stacked mini plots for ASAP outcome 2
+
+```{r stack miniplots}
+
+stack_miniplots(scen_dataset= "asap", scen_outcome_index = "2", scen_train_set_size = "2000", scen_cov_set_size = "small")
+```
+## ATE and CDML queens only
+
+```{r ATE/CDML queen plots}
+plot_two_queens(scen_dataset= "asap", scen_outcome_index = "2", queen1="ATE", queen2="CDML")
+
+```
+
+## All queens
+
+### ASAP continuous, small covariate set, train set = 1000
+
+```{r run scenario_allqueens 1}
+scenario_allqueens(scen_dataset="asap", scen_outcome_index = "2", scen_train_set_size = "1000", scen_cov_set_size = "small")
+```
+
+### ASAP continuous, medium covariate set, train set = 1000
+
+```{r run scenario_allqueens 2}
+scenario_allqueens(scen_dataset="asap", scen_outcome_index = "2", scen_train_set_size = "1000", scen_cov_set_size = "medium")
+```
+
+### ASAP continuous, large covariate set, train set = 1000
+
+```{r run scenario_allqueens 3}
+scenario_allqueens(scen_dataset="asap", scen_outcome_index = "2", scen_train_set_size = "1000", scen_cov_set_size = "large")
+
+```
+
+### ASAP continuous, small covariate set, train set =2000
+
+```{r run scenario_allqueens 4}
+scenario_allqueens(scen_dataset="asap", scen_outcome_index = "2", scen_train_set_size = "2000", scen_cov_set_size = "small")
+
+```
+
+### ASAP continuous, medium covariate set, train set = 2000
+
+```{r run scenario_allqueens 5}
+
+scenario_allqueens(scen_dataset="asap", scen_outcome_index = "2", scen_train_set_size = "2000", scen_cov_set_size = "medium")
+```
+
+### ASAP continuous, large covariate set, train set = 2000
+
+```{r run scenario_allqueens 6}
+scenario_allqueens(scen_dataset="asap", scen_outcome_index = "2", scen_train_set_size = "2000", scen_cov_set_size = "large")
+
+```
+
+### ASAP binary, small covariate set, train set = 1000 (leaving out for now)
+
+```{r run scenario_allqueens 7}
+#scenario_allqueens(scen_dataset="asap", scen_outcome_index = "1", scen_train_set_size = "1000", scen_cov_set_size = "small")
+
+```
+
+
+### Figures from Luke 
+
+```{r figures from Luke}
+
+# Make contour plot ----
+#all_scenarios_agg$se = all_scenarios_agg$SE
+df_set_1 <- filter( all_scenarios_agg, set_id == "asap-2-large-1000" )
+df_set_2 <- filter( all_scenarios_agg, set_id == "asap-2-large-5000" )
+
+#max_bias = max( df_set_1$bias, df_set_2$bias )
+#max_se = max( df_set_1$se, df_set_2$se )
+  scen_max = scenario_maximums%>%filter(dataset == "asap" & outcome_index == "2")%>% select(max) %>% unlist()
+  max_bias = scen_max
+  max_se = scen_max
+  breaks = unlist(scenario_maximums%>%filter(dataset == "asap" & outcome_index == "2")%>% select(breaks))
+
+
+p1 <- make_contour_plot( df_set_1, max_bias=max_bias, max_se=max_se , breaks = breaks)
+p1
+
+p2 <- make_contour_plot( df_set_2, max_bias=max_bias, max_se = max_se, breaks = breaks )
+p2
+
+
+
+# Alternate labeling approaches? ----
+
+p1B <- make_contour_plot( df_set_1, max_bias=max_bias, max_se=max_se, breaks = breaks, add_labels = FALSE )
+p1B + ggrepel::geom_text_repel(
+  aes(label = modelshort, col = type),
+  size = 2, # Increased label size
+  max.overlaps = Inf,
+  show.legend = FALSE
+)
+
+
+gbs = filter( df_set_1, model %in% c( "ATE", "OLS S", "LASSO INF", "RF INF" ) )
+gbs$model
+
+p1C <- ggplot( no_core( df_set_1 ), aes(se, bias, xmax=max_se, ymax=max_bias) ) +
+  contour_plot_base( max_bias = max_bias, max_se = max_se , breaks = breaks) +
+  geom_point(aes(color = type), size = 4, shape=19 ) +
+  geom_point( data = gbs, aes(pch=model), col="darkgrey", fill="darkgrey", size=4 ) +
+#  geom_point( data = gbs, size = 7, shape = 1, col="red" ) +
+  scale_shape_manual(breaks = c( "ATE", "OLS S", "LASSO INF", "RF INF" ),
+                     values = c( 15, 23, 25, 24 ) ) +
+  guides(color = guide_legend(title = "Model Type"),
+         shape = guide_legend(title = "Reference") )
+p1C
+
+
+p1C + ggrepel::geom_text_repel(
+  aes(label = modelshort, col = type),
+  size = 3, # Increased label size
+  max.overlaps = Inf,
+  min.segment.length = Inf,
+  show.legend = FALSE
+)
+
+#ggsave( here::here( "graphs/possible_clean_plot_1.pdf" ) )
+
+
+
+
+if ( FALSE ) {
+  # This isn't working
+  
+# Trying out animation ----
+
+library(ggplot2)
+library(gganimate)
+
+df_range = bind_rows( set1 = df_set_1, set2 = df_set_2, .id = "set" ) %>%
+ # dplyr::select( -n, -rmse ) %>%
+  group_by( model, type, modelshort )
+
+# Plot and animate
+
+p <- ggplot( df_range, aes(se, bias, xmax=max_se, ymax=max_bias) ) +
+  geom_point(aes(color = type, shape=type),  size = 4)  +
+  transition_states( set, transition_length = 2, state_length = 1, wrap=FALSE) +
+  ease_aes('linear') +
+  labs(title = "Scenario: {closest_state}") +
+  contour_plot_base( max_bias = max_bias, max_se = max_se , breaks = breaks ) +
+  theme( legend.position = "none" )
+
+p
+
+
+anim <- animate(p, duration = 5, fps = 10, width = 600, height = 400)
+
+gganimate::anim_save( here::here( "graphs/initial_animation.gif") )
+
+
+
+  # Extract the first frame
+  first_frame <- anim::anim_save(anim, start_pause = 1, nframes = 1)
+  
+  # Extract the last frame
+  last_frame <- anim_save(anim, end_pause = 1, nframes = 1)
+  
+  # Add labels to the first frame
+  first_frame_labeled <- ggplot_build(first_frame) +
+    ggrepel::geom_label_repel(
+      aes( label = after_stat(ifelse(set %in% c("set1", "set2"), modelshort, NA)), color = type),
+      size = 3, # Increased label size
+      box.padding = 0.75,
+      point.padding = 0.25,
+      max.overlaps = Inf,
+      show.legend = FALSE
+    )   
+  
+  geom_label_repel(aes(label = modelshort, color = type), size = 5)
+  
+  # Add labels to the last frame
+  last_frame_labeled <- ggplot_build(last_frame) +
+    geom_label_repel(aes(label = modelshort, color = type), size = 5)
+  
+  # You can now save or display these labeled frames
+#  ggsave("first_frame_with_labels.png", plot = first_frame_labeled)
+#  ggsave("last_frame_with_labels.png", plot = last_frame_labeled)
+  
+  
+  
+  
+}
+
+
+# "Trails from last plot" plot ----
+
+d_b = df_set_2 %>%
+  ungroup() %>%
+  dplyr::select( -c( set_id:train_set_size ) ) %>%
+  left_join( dplyr::select( ungroup( df_set_1 ), model, bias, se ), 
+             by = "model",
+             suffix = c( "", "old" ) )
+
+
+plt <-  ggplot( d_b, aes(se, bias, xmax=max_se, ymax=max_bias) ) +
+  geom_segment(aes(x = seold, y = biasold, xend = se, yend = bias),
+               arrow = arrow(length = unit(0.2, "cm")), lwd = 1, col="darkgrey") +
+  geom_point(aes(color = type, shape=type, size = as.numeric(3+1*baseline) ), fill="grey" ) + 
+  contour_plot_base( max_bias = max_bias, max_se = max_se , breaks = breaks) +
+  labs( title = "Trails of Models from 1000 to 2000" ) + 
+  scale_size_identity() +
+  guides( size="none" )
+plt
+
+
+# A second version
+
+pltB <-  ggplot( d_b, aes(se, bias, xmax=max_se, ymax=max_bias) ) +
+  #geom_point(aes(color = type, shape=type, size = as.numeric(4+2*baseline) ), fill="grey" ) + 
+  geom_segment(aes(x = seold, y = biasold, xend = se, yend = bias),
+               arrow = arrow(length = unit(0.2, "cm")), lwd = 1, col="lightgrey") +
+  geom_point( data = no_core( d_b ), aes(color = type), size = 4, shape=19 ) +
+  geom_point( data = only_core( d_b ), aes(pch=model), col="darkgrey", fill="darkgrey", size=4 ) +
+  contour_plot_base( max_bias = max_bias, max_se = max_se , breaks = breaks ) +
+  labs( title = "Trails of Models from 1000 to 2000" ) + 
+  scale_size_identity() +
+  scale_shape_manual(breaks = c( "ATE", "OLS S", "LASSO INF", "RF INF" ),
+                     values = c( 15, 23, 25, 24 ) ) +
+  guides(color = guide_legend(title = "Model Type"),
+         shape = guide_legend(title = "Reference"),
+         size="none" )
+pltB
+
+
+pltB + ggrepel::geom_text_repel(
+  aes(label = modelshort, col = type),
+  size = 3, # Increased label size
+  max.overlaps = Inf,
+  min.segment.length = Inf,
+  show.legend = FALSE
+)
+
+pltB
+
+#ggsave( here::here( "graphs/possible_clean_plot_2.pdf"))
