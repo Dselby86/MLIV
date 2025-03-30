@@ -62,5 +62,5 @@ The following are key folders in the repository:
 -   Complete all in `Set Up & Prerequisites for Collaborators`.
 -   Try running `02_MLIV_make_data.R`.
 -   If works, you are all set.
--   If produces an error, write an email to Polina.
+-   If produces an error, write an email to David.
 -   If you want to learn more about functions created, read `MLIV_DM.txt`
