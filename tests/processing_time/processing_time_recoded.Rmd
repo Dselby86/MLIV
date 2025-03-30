@@ -1,0 +1,1392 @@
+---
+title: "Running time"
+author: "Polina Polskaia"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    df_print: paged
+    fig_caption: yes
+    fig_height: 8
+    fig_width: 10
+    highlight: pygments
+    theme: spacelab
+    toc: yes
+    toc_depth: 6
+    toc_float: yes
+  pdf_document:
+    toc: yes
+    toc_depth: '6'
+editor_options:
+  markdown:
+    wrap: 72
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+# Call all of the programs in the simulation pipeline
+source( here::here( "simulation/03_simulation_launcher.R" ) ) 
+```
+
+
+
+```{r}
+library(here)
+source( here::here( "tests/get_data_to_debug.R" ) ) 
+# Load helper functions           
+source( here::here( "R/functions.R" ) )
+
+```
+
+
+```{r}
+source( here::here( "CA/01_load_real_CA.R" ) ) 
+
+```
+
+```{r}
+
+ca_train_test = get_data_train_test(S = 3, dataset = "ca", realdata = ca_subset_imputed, cov_set_size = "large", outcome_index = 1, include_RF = FALSE, include_Lasso = FALSE, include_Xbart = FALSE, include_CDML = FALSE)
+
+ca_test_set = ca_train_test[[1]]
+
+ca_baseline_remainder = ca_train_test[[2]]
+
+
+ca_train_set = ca_baseline_remainder[sample( nrow( ca_baseline_remainder ), 2000 ), ]
+
+
+
+# Prep the data by making covariates into matrices 
+Xs = make_x_matrix( ca_test_set, ca_covariates, data_train = ca_train_set )
+
+# Train data covariates 
+x_tr = Xs$X_tr
+
+# Test data covariates
+x_val = make_x_matrix( ca_test_set, ca_covariates, data_train = NULL ) 
+nval = nrow( x_val )
+
+# Train data, treatment assignment
+d_tr = ca_train_set[ , ca_treatment]
+
+# Train data, observed outcome and true individual treatment effects
+y_tr = ca_train_set[ , ca_outcomes[[1]]]
+
+tau_name = paste( ca_outcomes[[1]], "_tau", sep = "" )
+
+tau_tr = ca_train_set[[tau_name]]
+
+# Number of rows in train data
+ntrain = nrow( x_tr )
+
+# Extract True Tau from the test set
+array_result <- as.matrix(ca_test_set[[tau_name]])
+vector_result <- as.vector(array_result)
+tau_test = vector_result
+
+```
+
+
+Change estimate iate.
+
+
+
+```{r}
+
+estimate_iate_models = function( y_tr, d_tr, x_tr, tau_tr, 
+                                 x_val,
+                                 verbose = FALSE, #TODO:: Figure this out, do we need it, parallel hides it anyway?
+                                 include_RF = TRUE,
+                                 include_Lasso = TRUE,
+                                 include_Xbart = TRUE,
+                                 include_CDML = TRUE,
+                                 include_XGBOOST = TRUE,
+                                 include_BART = TRUE,
+                                 sd_Y0_real, # SD of Y0 in real data
+                                 ATE_real # ATE in real data
+                                 ) {
+  print(ATE_real)
+  # Check parameters passed
+  if ( is.numeric( y_tr ) ) {
+    y_tr = as.matrix( y_tr )
+  }
+
+  nval = nrow( x_val )
+  ntrain = length( y_tr )
+  
+  stopifnot( is.matrix( x_val ) )
+  stopifnot( length( d_tr ) == ntrain )
+  stopifnot( is.matrix( x_tr ) )
+  stopifnot( nrow( x_tr ) == ntrain )
+  stopifnot( length( tau_tr ) == ntrain )
+  stopifnot( ncol( x_val ) == ncol( x_tr ) )
+  
+  # Create IATE matrix
+  iates_mat = matrix( NA, nval, length( ALL_MODELS ) ) 
+  #runtime_mat = matrix( NA, nval, length( ALL_MODELS ) ) 
+  runtime_mat = matrix( NA, 1, length( ALL_MODELS ) ) 
+  percent_mat = matrix( NA, nval, length( ALL_MODELS ) ) 
+  colnames( iates_mat ) = ALL_MODELS
+  colnames( runtime_mat ) = ALL_MODELS
+  colnames( percent_mat ) = ALL_MODELS
+  
+  # Create a 2-fold set for cross-fitting
+  index = caret::createFolds( y_tr, k = 2 )
+  
+  # ATE
+  start_time = Sys.time()
+  #iates_mat[,1] = ate_model( x_tr, y_tr, d_tr, x_val )
+  ate_predictions =  ate_model( x_tr, y_tr, d_tr, x_val )
+  p_broke = ifelse(abs(ate_predictions - ATE_real) > sd_Y0_real, 1, 0)
+
+  ate_predictions[ (ate_predictions-ATE_real) > sd_Y0_real ] = ATE_real + sd_Y0_real
+  ate_predictions[ (ate_predictions-ATE_real) < -sd_Y0_real ] = ATE_real - sd_Y0_real
+  
+  iates_mat[,1] = ate_predictions
+  end_time = Sys.time()
+  runtime_mat[,1] = end_time - start_time
+  percent_mat[,1] = p_broke
+  
+  # linear regression (baseline)
+  vcat( verbose, "Lin Reg" )
+  start_time = Sys.time()
+  #iates_mat[, 2] =  lin_reg_estimator( y_tr, d_tr, x_tr, x_val )
+  lin_reg_predictions =  lin_reg_estimator( y_tr, d_tr, x_tr, x_val )
+  p_broke = ifelse(abs(lin_reg_predictions - ATE_real) > sd_Y0_real, 1, 0)
+  
+  lin_reg_predictions[ (lin_reg_predictions-ATE_real) > sd_Y0_real ] = ATE_real + sd_Y0_real
+  lin_reg_predictions[ (lin_reg_predictions-ATE_real) < -sd_Y0_real ] = ATE_real - sd_Y0_real
+  
+  iates_mat[, 2] = lin_reg_predictions
+  
+  end_time = Sys.time()
+  runtime_mat[,2] = end_time - start_time
+  percent_mat[,2] = p_broke
+  
+  ### RF Forest based methods
+  if ( include_RF ) {
+    vcat( verbose, "RF methods" )
+    
+    # Infeasible RF
+    start_time = Sys.time()
+    #iates_mat[, 3] = rf_inf_model( x_tr, tau_tr, x_val )
+    rf_inf_predictions =  rf_inf_model( x_tr, tau_tr, x_val )
+    p_broke = ifelse(abs(rf_inf_predictions - ATE_real) > sd_Y0_real, 1, 0)
+    
+    rf_inf_predictions[ (rf_inf_predictions-ATE_real) > sd_Y0_real ] = ATE_real + sd_Y0_real
+    rf_inf_predictions[ (rf_inf_predictions-ATE_real) < -sd_Y0_real ] = ATE_real - sd_Y0_real
+    
+
+    iates_mat[, 3] = rf_inf_predictions
+    end_time = Sys.time()
+    runtime_mat[,3] = end_time - start_time
+    percent_mat[,3] = p_broke
+    
+    # CMR Random Forest
+    start_time = Sys.time()
+    #iates_mat[,4] = rf_cmr_model( x_tr, y_tr, d_tr, x_val )
+    rf_cmr_predictions = rf_cmr_model( x_tr, y_tr, d_tr, x_val )
+    p_broke = ifelse(abs(rf_cmr_predictions - ATE_real) > sd_Y0_real, 1, 0)
+    
+    rf_cmr_predictions[ (rf_cmr_predictions-ATE_real) > sd_Y0_real ] = ATE_real + sd_Y0_real
+    rf_cmr_predictions[ (rf_cmr_predictions-ATE_real) < -sd_Y0_real ] = ATE_real - sd_Y0_real
+    
+
+    iates_mat[,4] = rf_cmr_predictions
+    end_time = Sys.time()
+    runtime_mat[,4] = end_time - start_time
+    percent_mat[,4] = p_broke
+    
+    # Estimate RF nuisance parameters
+  
+    # When calculating runtime, add this time to each RF time below 
+    start_time = Sys.time()
+    np = nuisance_cf_grf( y_tr, d_tr, x_tr, index )
+    end_time = Sys.time()
+    rf_time = end_time - start_time 
+    
+    # MOMs with RF
+    # estimator_nm = list( mom_ipw_grf, mom_dr_grf )
+    # for ( j in 1:2 ) {
+    #   start_time = Sys.time()
+    #   iates_mat[,j+4] = do.call( cf_dml1, list( estimator_nm[[j]], y_tr, d_tr, x_tr, np, x_val, index ) )
+    #   end_time = Sys.time()
+    #   runtime_mat[,j+4] = rf_time + end_time - start_time} 
+    
+    # Estimator 1: mom_ipw_grf
+    start_time1 = Sys.time()
+    #iates_mat[, 5] = cf_dml1(mom_ipw_grf, y_tr, d_tr, x_tr, np, x_val, index)
+    mom_ipw_grf_predictions = cf_dml1(mom_ipw_grf, y_tr, d_tr, x_tr, np, x_val, index)
+    p_broke = ifelse(abs(mom_ipw_grf_predictions - ATE_real) > sd_Y0_real, 1, 0)
+    
+    mom_ipw_grf_predictions[ (mom_ipw_grf_predictions-ATE_real) > sd_Y0_real ] = ATE_real + sd_Y0_real
+    mom_ipw_grf_predictions[ (mom_ipw_grf_predictions-ATE_real) < -sd_Y0_real ] = ATE_real - sd_Y0_real
+    
+
+    iates_mat[, 5] = mom_ipw_grf_predictions
+    
+    end_time1 = Sys.time()
+    runtime_mat[, 5] = rf_time + end_time1 - start_time1
+    percent_mat[,5] = p_broke
+    
+    # Estimator 2: mom_dr_grf
+    start_time2 = Sys.time()
+    #iates_mat[, 6] = cf_dml1(mom_dr_grf, y_tr, d_tr, x_tr, np, x_val, index)
+    mom_dr_grf_predictions = cf_dml1(mom_dr_grf, y_tr, d_tr, x_tr, np, x_val, index)
+    p_broke = ifelse(abs(mom_dr_grf_predictions - ATE_real) > sd_Y0_real, 1, 0)
+    
+    mom_dr_grf_predictions[ (mom_dr_grf_predictions-ATE_real) > sd_Y0_real ] = ATE_real + sd_Y0_real
+    mom_dr_grf_predictions[ (mom_dr_grf_predictions-ATE_real) < -sd_Y0_real ] = ATE_real - sd_Y0_real
+
+    iates_mat[, 6] = mom_dr_grf_predictions
+    
+    end_time2 = Sys.time()
+    runtime_mat[, 6] = rf_time + end_time2 - start_time2
+    percent_mat[,6] = p_broke
+    
+    # Causal Forest
+    start_time = Sys.time()
+    #iates_mat[,7] = cf_model( x_tr, y_tr, d_tr, x_val, ntrain  )
+    cf_predictions = cf_model( x_tr, y_tr, d_tr, x_val, ntrain  )
+    p_broke = ifelse(abs(cf_predictions - ATE_real) > sd_Y0_real, 1, 0)
+    
+    cf_predictions[ (cf_predictions-ATE_real) > sd_Y0_real ] = ATE_real + sd_Y0_real
+    cf_predictions[ (cf_predictions-ATE_real) < -sd_Y0_real ] = ATE_real - sd_Y0_real
+
+    iates_mat[, 7] = cf_predictions
+    
+    end_time = Sys.time()
+    runtime_mat[,7] = end_time - start_time
+    percent_mat[,7] = p_broke
+    
+    # Causal Forest with local centering
+    start_time = Sys.time()
+    #iates_mat[,8] = cf_lc_model( x_tr, y_tr, d_tr, x_val, np )
+    
+    cf_lc_predictions = cf_lc_model( x_tr, y_tr, d_tr, x_val, np )
+    p_broke = ifelse(abs(cf_lc_predictions - ATE_real) > sd_Y0_real, 1, 0)
+    
+    cf_lc_predictions[ (cf_lc_predictions-ATE_real) > sd_Y0_real ] = ATE_real + sd_Y0_real
+    cf_lc_predictions[ (cf_lc_predictions-ATE_real) < -sd_Y0_real ] = ATE_real - sd_Y0_real
+
+    iates_mat[, 8] = cf_lc_predictions
+    
+    end_time = Sys.time()
+    runtime_mat[,8] = rf_time + end_time - start_time
+    percent_mat[,8] = p_broke
+    
+    
+  } else {
+    vcat( verbose, "Skipping RF methods" )
+  }
+  
+  ### CDML method
+  if ( include_CDML ) {
+    vcat( verbose, "CDML method" )
+    
+    # CDML
+    start_time = Sys.time()
+    #iates_mat[,9] = cdml_model( y_tr, d_tr, x_tr, x_val ) 
+    cdml_predictions =  cdml_model( y_tr, d_tr, x_tr, x_val )
+    p_broke = ifelse(abs(cdml_predictions - ATE_real) > sd_Y0_real, 1, 0)
+    
+    cdml_predictions[ (cdml_predictions-ATE_real) > sd_Y0_real ] = ATE_real + sd_Y0_real
+    cdml_predictions[ (cdml_predictions-ATE_real) < -sd_Y0_real ] = ATE_real - sd_Y0_real
+
+    iates_mat[,9] = cdml_predictions
+    end_time = Sys.time()
+    runtime_mat[,9] = end_time - start_time
+    percent_mat[,9] = p_broke
+    
+    
+  } else {
+    vcat( verbose, "Skipping CDML methods" )
+  }
+  
+  ### Lasso based methods
+  if ( include_Lasso ) {
+    vcat( verbose, "Lasso methods" )
+    
+    # Infeasible Lasso
+    start_time = Sys.time()
+    # Check if tau_tr is constant
+    if ( sd( tau_tr ) == 0 ) {
+      # If tau_tr is constant, do not run the rf_inf_model
+      cat("tau_tr is constant. Skipping lasso_inf_model. Pasted 0s\n")
+      iates_mat[,10] = tau_tr[[1]] 
+      end_time = Sys.time()
+      runtime_mat[,10] = end_time - start_time
+      percent_mat[,10] = 0
+    } else {
+      # If tau_tr is not constant, run the rf_inf_model
+      #iates_mat[,10] = lasso_inf_model( x_tr, tau_tr, x_val )
+      lasso_inf_predictions =  lasso_inf_model( x_tr, tau_tr, x_val )
+      p_broke = ifelse(abs(lasso_inf_predictions - ATE_real) > sd_Y0_real, 1, 0)
+      
+      lasso_inf_predictions[ (lasso_inf_predictions-ATE_real) > sd_Y0_real ] = ATE_real + sd_Y0_real
+      lasso_inf_predictions[ (lasso_inf_predictions-ATE_real) < -sd_Y0_real ] = ATE_real - sd_Y0_real
+
+      iates_mat[,10] = lasso_inf_predictions
+      end_time = Sys.time()
+      runtime_mat[,10] = end_time - start_time
+      percent_mat[,10] = p_broke
+    }
+    
+    # CMR Lasso
+    start_time = Sys.time()
+    #iates_mat[,11] = lasso_cmr_model( x_tr, y_tr, d_tr, x_val )
+    lasso_cmr_predictions =  lasso_cmr_model( x_tr, y_tr, d_tr, x_val )
+    p_broke = ifelse(abs(lasso_cmr_predictions - ATE_real) > sd_Y0_real, 1, 0)
+    
+    lasso_cmr_predictions[ (lasso_cmr_predictions-ATE_real) > sd_Y0_real ] = ATE_real + sd_Y0_real
+    lasso_cmr_predictions[ (lasso_cmr_predictions-ATE_real) < -sd_Y0_real ] = ATE_real - sd_Y0_real
+
+    iates_mat[,11] = lasso_cmr_predictions
+    end_time = Sys.time()
+    runtime_mat[,11] = end_time - start_time
+    percent_mat[,11] = p_broke
+    
+    # Estimate Lasso nuisance parameters with same index
+    
+    # When calculating the runtime, will add this time to each Lasso parameter below
+    start_time = Sys.time()
+    np = nuisance_cf_glmnet( y_tr, d_tr, x_tr, index )
+    end_time = Sys.time()
+    lasso_nuisance_time = end_time - start_time
+    
+    # MOMs, MCMs and RL with Lasso
+    vcat( verbose, "MOMs, MCMs and RL with Lasso" )
+    
+    # estimator_nm = list( mom_ipw_glmnet, mom_dr_glmnet,
+    #                      mcm_glmnet, mcm_ea_glmnet, rl_glmnet )
+    # for (j in 1:5) {
+    #   
+    #   start_time = Sys.time()
+    #   iates_mat[,j+11] = cf_dml1( est = estimator_nm[[j]], y_tr, d_tr, x_tr,
+    #                               np, x_val, index )
+    #   end_time = Sys.time()
+    #   runtime_mat[,j+11] = lasso_nuisance_time + end_time - start_time
+    # }
+    
+    # Call cf_dml1 for each estimator separately
+    start_time <- Sys.time()
+    
+    # Estimator 1: mom_ipw_glmnet
+    #iates_mat[, 12] <- cf_dml1(mom_ipw_glmnet, y_tr, d_tr, x_tr, np, x_val, index)
+    
+    mom_ipw_glmnet_predictions = cf_dml1(mom_ipw_glmnet, y_tr, d_tr, x_tr, np, x_val, index)
+    p_broke = ifelse(abs(mom_ipw_glmnet_predictions - ATE_real) > sd_Y0_real, 1, 0)
+    
+    mom_ipw_glmnet_predictions[ (mom_ipw_glmnet_predictions-ATE_real) > sd_Y0_real ] = ATE_real + sd_Y0_real
+    mom_ipw_glmnet_predictions[ (mom_ipw_glmnet_predictions-ATE_real) < -sd_Y0_real ] = ATE_real - sd_Y0_real
+
+    iates_mat[,12] = mom_ipw_glmnet_predictions
+    
+    end_time <- Sys.time()
+    runtime_mat[, 12] <- lasso_nuisance_time + end_time - start_time
+    percent_mat[,12] = p_broke
+    
+    # Estimator 2: mom_dr_glmnet
+    start_time <- Sys.time()
+    iates_mat[, 13] <- cf_dml1(mom_dr_glmnet, y_tr, d_tr, x_tr, np, x_val, index)
+    
+    mom_dr_glmnet_predictions = cf_dml1(mom_dr_glmnet, y_tr, d_tr, x_tr, np, x_val, index)
+    p_broke = ifelse(abs(mom_dr_glmnet_predictions - ATE_real) > sd_Y0_real, 1, 0)
+    
+    mom_dr_glmnet_predictions[ (mom_dr_glmnet_predictions-ATE_real) > sd_Y0_real ] = ATE_real + sd_Y0_real
+    mom_dr_glmnet_predictions[ (mom_dr_glmnet_predictions-ATE_real) < -sd_Y0_real ] = ATE_real - sd_Y0_real
+
+    iates_mat[, 13] = mom_dr_glmnet_predictions
+    
+    end_time <- Sys.time()
+    runtime_mat[, 13] <- lasso_nuisance_time + end_time - start_time
+    percent_mat[,13] = p_broke
+    
+    # Estimator 3: mcm_glmnet
+    start_time <- Sys.time()
+    #iates_mat[, 14] <- cf_dml1(mcm_glmnet, y_tr, d_tr, x_tr, np, x_val, index)
+    
+    mcm_glmnet_predictions = cf_dml1(mcm_glmnet, y_tr, d_tr, x_tr, np, x_val, index)
+    p_broke = ifelse(abs(mcm_glmnet_predictions - ATE_real) > sd_Y0_real, 1, 0)
+    
+    mcm_glmnet_predictions[ (mcm_glmnet_predictions-ATE_real) > sd_Y0_real ] = ATE_real + sd_Y0_real
+    mcm_glmnet_predictions[ (mcm_glmnet_predictions-ATE_real) < -sd_Y0_real ] = ATE_real - sd_Y0_real
+
+    iates_mat[, 14] = mcm_glmnet_predictions
+    
+    end_time <- Sys.time()
+    runtime_mat[, 14] <- lasso_nuisance_time + end_time - start_time
+    percent_mat[,14] = p_broke
+    
+    # Estimator 4: mcm_ea_glmnet
+    start_time <- Sys.time()
+    #iates_mat[, 15] <- cf_dml1(mcm_ea_glmnet, y_tr, d_tr, x_tr, np, x_val, index)
+    
+    mcm_ea_glmnet_predictions = cf_dml1(mcm_ea_glmnet, y_tr, d_tr, x_tr, np, x_val, index)
+    p_broke = ifelse(abs(mcm_ea_glmnet_predictions - ATE_real) > sd_Y0_real, 1, 0)
+    
+    mcm_ea_glmnet_predictions[ (mcm_ea_glmnet_predictions-ATE_real) > sd_Y0_real ] = ATE_real + sd_Y0_real
+    mcm_ea_glmnet_predictions[ (mcm_ea_glmnet_predictions-ATE_real) < -sd_Y0_real ] = ATE_real - sd_Y0_real
+
+    iates_mat[, 15] = mcm_ea_glmnet_predictions
+    
+    end_time <- Sys.time()
+    runtime_mat[, 15] <- lasso_nuisance_time + end_time - start_time
+    percent_mat[,15] = p_broke
+    
+    # Estimator 5: rl_glmnet
+    start_time <- Sys.time()
+    #iates_mat[, 16] <- cf_dml1(rl_glmnet, y_tr, d_tr, x_tr, np, x_val, index)
+    
+    rl_glmnet_predictions = cf_dml1(rl_glmnet, y_tr, d_tr, x_tr, np, x_val, index)
+    p_broke = ifelse(abs(rl_glmnet_predictions - ATE_real) > sd_Y0_real, 1, 0)
+    
+    rl_glmnet_predictions[ (rl_glmnet_predictions-ATE_real) > sd_Y0_real ] = ATE_real + sd_Y0_real
+    rl_glmnet_predictions[ (rl_glmnet_predictions-ATE_real) < -sd_Y0_real ] = ATE_real - sd_Y0_real
+
+    iates_mat[, 16] = rl_glmnet_predictions
+    
+    end_time <- Sys.time()
+    runtime_mat[, 16] <- lasso_nuisance_time + end_time - start_time
+    percent_mat[,16] = p_broke
+    
+  } else {
+    vcat( verbose, "Skipping Lasso methods" )
+  }
+  
+  #Finally Xbart
+  #TODO:: Does not run on Windows
+  if ( include_Xbart ) {
+    vcat( verbose, "Xbart" )
+    
+    start_time = Sys.time()
+    #iates_mat[,17] = x_bart_model( x_tr, y_tr, d_tr, x_val )
+    x_bart_predictions =  x_bart_model( x_tr, y_tr, d_tr, x_val )
+    p_broke = ifelse(abs(x_bart_predictions - ATE_real) > sd_Y0_real, 1, 0)
+    
+    x_bart_predictions[ (x_bart_predictions-ATE_real) > sd_Y0_real ] = ATE_real + sd_Y0_real
+    x_bart_predictions[ (x_bart_predictions-ATE_real) < -sd_Y0_real ] = ATE_real - sd_Y0_real
+
+    iates_mat[,17] = x_bart_predictions
+    end_time = Sys.time()
+    runtime_mat[,17] = end_time - start_time
+    percent_mat[,17] = p_broke
+    
+  } else {
+    vcat( verbose, "Skipping XBart method" )
+  }
+  
+  # XGBOOST
+  if ( include_XGBOOST ) {
+    vcat( verbose, "XGBOOST T, XGBOOST S, and XGBOOST R" )
+    
+    # XGBOOST T
+    
+    start_time = Sys.time()
+
+    xgboost_t_predictions =  xgboost_t_alg( x_tr, y_tr, d_tr, x_val )
+    p_broke = ifelse(abs(xgboost_t_predictions - ATE_real) > sd_Y0_real, 1, 0)
+    
+    xgboost_t_predictions[ (xgboost_t_predictions-ATE_real) > sd_Y0_real ] = ATE_real + sd_Y0_real
+    xgboost_t_predictions[ (xgboost_t_predictions-ATE_real) < -sd_Y0_real ] = ATE_real - sd_Y0_real
+    
+    iates_mat[,18] = xgboost_t_predictions
+    
+    end_time = Sys.time()
+    
+    runtime_mat[,18] = end_time - start_time
+    percent_mat[,18] = p_broke
+    
+    # XGBOOST S
+    
+    start_time = Sys.time()
+    
+    xgboost_s_predictions =  xgboost_s_alg( x_tr, y_tr, d_tr, x_val )
+    p_broke = ifelse(abs(xgboost_s_predictions - ATE_real) > sd_Y0_real, 1, 0)
+    
+    xgboost_s_predictions[ (xgboost_s_predictions-ATE_real) > sd_Y0_real ] = ATE_real + sd_Y0_real
+    xgboost_s_predictions[ (xgboost_s_predictions-ATE_real) < -sd_Y0_real ] = ATE_real - sd_Y0_real
+    
+    iates_mat[,19] = xgboost_s_predictions
+    
+    end_time = Sys.time()
+    
+    runtime_mat[,19] = end_time - start_time
+    percent_mat[,19] = p_broke
+    
+    # XGBOOST R
+    
+    start_time = Sys.time()
+    
+    xgboost_r_predictions =  xgboost_r_alg( x_tr, y_tr, d_tr, x_val )
+    p_broke = ifelse(abs(xgboost_r_predictions - ATE_real) > sd_Y0_real, 1, 0)
+    
+    xgboost_r_predictions[ (xgboost_r_predictions-ATE_real) > sd_Y0_real ] = ATE_real + sd_Y0_real
+    xgboost_r_predictions[ (xgboost_r_predictions-ATE_real) < -sd_Y0_real ] = ATE_real - sd_Y0_real
+    
+    iates_mat[,20] = xgboost_r_predictions
+    
+    end_time = Sys.time()
+    
+    runtime_mat[,20] = end_time - start_time
+    percent_mat[,20] = p_broke
+    
+  } else {
+    vcat( verbose, "Skipping XGBOOST methods" )
+  }
+  
+  # BART
+  if ( include_BART ) {
+    vcat( verbose, "BART T, BART S" )
+    
+    # BART T
+    
+    start_time = Sys.time()
+    
+    bart_t_predictions =  bart_t_alg( x_tr, y_tr, d_tr, x_val )
+    p_broke = ifelse(abs(bart_t_predictions - ATE_real) > sd_Y0_real, 1, 0)
+    
+    bart_t_predictions[ (bart_t_predictions-ATE_real) > sd_Y0_real ] = ATE_real + sd_Y0_real
+    bart_t_predictions[ (bart_t_predictions-ATE_real) < -sd_Y0_real ] = ATE_real - sd_Y0_real
+    
+    iates_mat[,21] = bart_t_predictions
+    
+    end_time = Sys.time()
+    
+    runtime_mat[,21] = end_time - start_time
+    percent_mat[,21] = p_broke
+  } else {
+    vcat( verbose, "Skipping BART methods" )
+  }
+  
+  return ( list( iates_mat, runtime_mat, percent_mat ) )
+}
+
+
+
+```
+
+
+
+```{r}
+
+output1 = estimate_iate_models( y_tr, d_tr, x_tr, tau_tr, 
+                                 x_val,
+                                 verbose = FALSE, #TODO:: Figure this out, do we need it, parallel hides it anyway?
+                                 include_RF = FALSE,
+                                 include_Lasso = FALSE,
+                                 include_Xbart = FALSE,
+                                 include_CDML = FALSE,
+                                 include_XGBOOST = FALSE,
+                                 include_BART = FALSE,
+                                 sd_Y0_real = 991, # SD of Y0 in real data
+                                 ATE_real = 141 # ATE in real data
+                                 )
+```
+
+
+Change perform_simulation:
+
+
+```{r}
+
+#' perform_simulation:: The function to apply models in the simulation
+#'
+#' @param S Number of simulation runs
+#' @param test_set Test set
+#' @param baseline_remainder What is left of the full baseline data
+#'   after taking test set
+#' @param size_train The numbers of obs in the train data
+#' @param p_tx Proportion treated. If NULL will use proportion treated
+#'   of passed data.
+#' @param outcome Outcome name
+#' @param treatment Treatment name
+#' @param covariates Covariates names
+#' @param include_RF Include RF models
+#' @param include_Lasso Include Lasso models
+#' @param include_Xbart Include XBART
+#' @param include_CDML Include CDML
+#'
+#' @return outputs RMSPE, Bias, and SD matrix as described in the EMCS
+#'   paper
+#'
+#' @export
+
+perform_simulation = function( S, 
+                               test_set, 
+                               baseline_remainder,
+                               size_train, 
+                               p_tx = NULL, 
+                               outcome,
+                               treatment,
+                               covariates,
+                               include_RF = TRUE, 
+                               include_Lasso = TRUE,
+                               include_Xbart = TRUE,
+                               include_CDML = TRUE,
+                               include_XGBOOST = TRUE,
+                               include_BART = TRUE,
+                               seed = NULL,
+                               verbose = TRUE,
+                               sd_Y0_real, # SD of Y0 in real data
+                               ATE_real # ATE in real data
+                             ) { 
+
+
+  if ( is.null( seed ) ) {
+    seed = 40444
+    warning( "Seed hardcoded in perform_simulation" )
+  }
+  
+  # Create a matrix of covariates in test data 
+  
+  # If covariate is a factor than it will be recoded as a dummy to ensure correct levels
+  #TODO:: Recode all categorical covariates as factors earlier in the programs
+  x_val = make_x_matrix( test_set, covariates, data_train = NULL ) 
+  nval = nrow( x_val )
+  
+  y_name = outcome
+  tau_name = paste( y_name, "_tau", sep = "" )
+  
+  stopifnot( !is.null( test_set[[y_name]] ) )
+  stopifnot( !is.null( test_set[[tau_name]] ) )
+  stopifnot( !is.null( x_val ) )
+  
+  # Create matrix for storing predicted tau per model per unit per iteration
+  sim_data = array( 0, c( S, nval, length( ALL_MODELS ) ) )   
+  # Create matrix for storing runtime per model model per unit per iteration
+  runtime_data = array( 0, c( S, length( ALL_MODELS ) ) )   
+
+  # Create matrix for storing percentage cut per model model per unit per iteration
+  percent_data = array( 0, c( S, nval, length( ALL_MODELS ) ) )   
+  
+  for ( i in 1:S ){
+    
+    # Let us know on which iter we are on now
+    print( i )
+    
+    # Reset the seed so each train set is different
+    set.seed( seed + 13*i ) 
+    
+    # Sample training data
+    train_set = baseline_remainder[sample( nrow( baseline_remainder ), size_train ), ]
+    
+    # Prep the data by making covariates into matrices 
+    Xs = make_x_matrix( test_set, covariates, data_train = train_set )
+    
+    # Train data covariates 
+    x_tr = Xs$X_tr
+    
+    # Train data, treatment assignment
+    d_tr = train_set[ , treatment]
+    
+    # Train data, observed outcome and true individual treatment effects
+    y_tr = train_set[ , y_name]
+    tau_tr = train_set[[tau_name]]
+    
+    # Number of rows in train data
+    ntrain = nrow( x_tr )
+    
+    # iates_matrix is a matrix of predictions on the test set for each iteration
+    iates_matrix = estimate_iate_models( y_tr = y_tr,
+                                         d_tr =d_tr,
+                                         x_tr = x_tr,
+                                         tau_tr = tau_tr, 
+                                         x_val = x_val,
+                                         verbose = verbose,
+                                         include_RF = include_RF, 
+                                         include_Lasso = include_Lasso,
+                                         include_Xbart = include_Xbart,
+                                         include_CDML = include_CDML,
+                                         include_XGBOOST = include_XGBOOST,
+                                         include_BART = include_BART,
+                                         sd_Y0_real = sd_Y0_real, # SD of Y0 in real data
+                                         ATE_real = ATE_real # ATE in real data
+                                         )
+    
+    sim_data[i,,] = iates_matrix[[1]]
+    runtime_data[i,] = iates_matrix[[2]]
+    percent_data[i,,] = iates_matrix[[3]]
+    # Storing predicted tau per model per unit per iteration
+    # Checked: Looks good, 160000 / 16 models = 10000 (our test set)
+    
+  }  
+  
+  # Name the dimensions of the matrix for ease of use
+  dms = dim( sim_data )
+  dimnames( sim_data ) = list( 1:dms[[1]], 1:dms[[2]], ALL_MODELS )
+  dimnames( percent_data ) = list( 1:dms[[1]], 1:dms[[2]], ALL_MODELS )
+  
+  dms = dim( runtime_data )
+  dimnames( runtime_data ) = list( 1:dms[[1]], ALL_MODELS )
+  
+  # Drop ML methods that we skipped by looking for NAs in the result
+  # matrix.
+  na_models = ALL_MODELS[apply( sim_data[1, , ], 2, function( x ) anyNA( x ) )]
+  sim_data = sim_data[, , !ALL_MODELS %in% na_models]
+  percent_data = percent_data[, , !ALL_MODELS %in% na_models]
+  
+  
+      # Extract the first row of runtime_data as a data frame
+  runtime_data_row <- as.data.frame(runtime_data[1, ])
+  
+  # Find the column indices where the first row contains NA
+  na_columns <- which(is.na(runtime_data_row))
+  
+  # Remove the columns with NA in the first row from runtime_data
+  runtime_data <- runtime_data[, -na_columns, drop = FALSE]
+  
+  return( list( sim_data, runtime_data, percent_data) )
+} 
+
+
+```
+
+
+```{r}
+output2 = perform_simulation( S = 50, 
+                               test_set = ca_test_set, 
+                               baseline_remainder = ca_baseline_remainder,
+                               size_train = 2000, 
+                               p_tx = NULL, 
+                               outcome = "Y18JBERNA_06",
+                               treatment = "TREATMNT",
+                               covariates = c("ETHNIC", "READCAT", "AGE", "ATRATCP1", "MATHCAT", "FEMALE" ),
+                               include_RF = FALSE, 
+                               include_Lasso = FALSE,
+                               include_Xbart = FALSE,
+                               include_CDML = FALSE,
+                               include_XGBOOST = FALSE,
+                               include_BART = FALSE,
+                    
+                               seed = NULL,
+                               verbose = TRUE,
+                               
+                               sd_Y0_real = 991, # SD of Y0 in real data
+                               ATE_real = 141# ATE in real data
+                             )
+```
+
+
+
+
+```{r}
+   array_result <- as.matrix(ca_test_set[[tau_name]])
+    vector_result <- as.vector(array_result)
+    tau_test = vector_result
+```
+
+
+Change processing results.
+
+
+```{r}
+process_sim_results = function( sim_data_list, tau ) {
+  
+  #sim_data_list is a list with two entries: sim_data and runtime_data
+  tau = as.numeric( tau )
+  sim_data = sim_data_list[[1]]
+  #runtime_data = sim_data_list[[2]]
+  percent_data = sim_data_list[[3]]
+  dims = dim( sim_data ) # fixing a potential bug in rmse
+  
+  
+   # Calculate expected estimates for each method
+  tau_bar_hat = apply( sim_data, 2:3, mean ) # Average across simulation runs
+  stopifnot( nrow( tau_bar_hat ) == length( tau ) )
+  
+  # Bias
+  bias = tau_bar_hat - tau
+
+  # Squared errors
+  errs2 = ( sim_data - rep( tau, each=dims[[1]] ) )^2  # When you perform an operation between an array and a vector, R automatically recycles (repeats) the vector to match the dimensions of the array
+  # RMSE
+  rmse = sqrt( apply( errs2, 2:3, mean ) ) # PP Looks logical to me as mse = apply(errs2, 2:3, mean)
+  
+  # SE
+  se = apply( sim_data, 2:3, sd ) # PP Should it be something like:
+  #sd = apply( sim_data, 2:3, sd )
+  #se = sd / sqrt(dims[[1]])
+
+  
+  # Runtime - calculate average runtime for each method, queen, id
+  # runtime = apply(runtime_data, 2:3, mean) #Average runtime across simulation runs
+  percent_cut = apply(percent_data, 2:3, mean) #Average percent_cut across simulation runs
+  
+  
+  res = bind_rows( bias = as_tibble( bias ), 
+                   se = as_tibble( se ), 
+                   rmse = as_tibble( rmse ),
+                   #runtime = as_tibble( runtime ),
+                   percent_cut = as_tibble( percent_cut ),
+                   .id = "metric" )
+  
+  res = res %>%
+    #changing to 5 from 3 to add in runtime and percent_cut
+    mutate( id = rep( 1:length( tau ), 4  ) ) %>%
+    relocate( metric, id )
+  
+  return( res )  
+}
+
+```
+
+
+
+```{r}
+output3 = process_sim_results(output2, tau_test)
+```
+
+
+
+```{r}
+perform_simulation_launcher = function( S = 3, # Number of iterations in the simulation
+                                        dataset, # Dataset acronym from the lookup_table
+                                        realdata, # Real dataset 
+                                        cov_set_size = "small", # Covariate set size. Default to small.
+                                        outcome_index = 1, # Order of outcome in the outcome list. Default to first.
+                                        size_train = 2000, # Number of rows in train data. Default to 2000.
+                                        size_test = 10000, # Number of rows in test data. Default to 10000.
+                                        p_tx = NULL, # Proportion treated. If NULL will use proportion treated of passed data.
+                                        special_covariates = NULL, # Add any additional covariate (for example, a site/cohort interaction) to all covariate sets
+                                        include_RF = TRUE, # Include RF models
+                                        include_Lasso = TRUE, # Include Lasso models
+                                        include_Xbart = TRUE, # Include Xbart model
+                                        include_CDML = TRUE, # Include CDML model
+                                        include_XGBOOST = TRUE,
+                                        include_BART = TRUE,
+                                        ... ) { 
+  
+  # Assign proper variable names for covariates based on the dataset chosen 
+  covariates_sets = lookup_table[[dataset]]$covariates
+  core_covariates = covariates_sets[[cov_set_size]]
+  
+  # Assign proper variable names for outcomes based on the dataset chosen   
+  outcomes = lookup_table[[dataset]]$outcomes
+  outcome = outcomes[outcome_index]
+  
+  # Assign proper variable name for treatment based on the dataset chosen 
+  treatment = lookup_table[[dataset]]$treatment
+  
+  # Add special covaraites if any to the list of covariates
+  covariates = core_covariates
+  if ( !is.null( special_covariates ) ) {
+    covariates = c( covariates, special_covariates )
+  }
+  
+  # Covariate set for Y1 is always small
+  covariates_sets_Y1 = lookup_table[[dataset]]$covariates
+  core_covariates_Y1 = covariates_sets_Y1[[cov_set_size]]
+  
+  ##############################################################################
+  # Remove any rows with missing data in outcome
+  realdata = realdata[ !is.na( realdata[[outcome]] ), ]
+  
+  # Save the y name
+  y_name = outcome 
+  
+  # Calculate the SD of Y0
+  Y0_values = realdata[realdata[, treatment] == 0, y_name]
+  sd_Y0_real = sd( Y0_values )
+  print( sd_Y0_real )
+ 
+  # Calculate ATE 
+  ATE_real = mean(realdata[realdata[[treatment]] == 1, y_name]) - mean(realdata[realdata[[treatment]] == 0, y_name])
+  print(ATE_real)
+  ##############################################################################
+  
+  # Set which model we are testing
+  models = c( "ATE", "OLS" )
+  #models = c()
+  if ( include_RF ) {
+    models = c( models, "RF Inf", "RF CMR", "RF MOM IPW", "RF MOM DR", "CF", "CF LC" )
+  }
+  
+  if ( include_CDML ) {
+    models = c( models, "CDML" )
+  }
+  
+  if ( include_Lasso ) {
+    models = c(
+      models,
+      "Lasso Inf", "Lasso CMR", "Lasso MOM IPW", "Lasso MOM DR",
+      "Lasso MCM", "Lasso MCM EA", "Lasso RL"
+    )
+  }
+  
+  if ( include_Xbart ) {
+    models = c( models, "XBART" )
+  }
+  
+  if ( include_XGBOOST ) {
+    models = c( models, "XGBOOST T", "XGBOOST S", "XGBOOST R" )
+  }
+  
+  if ( include_BART ) {
+    models = c( models, "BART T" )
+  }
+  
+  
+  # Create an empty list to store the result dataframes
+  result_list <- list()
+  
+  # For Analog
+  for ( queen in models ) {
+  # For Parallel:
+  #result_list = foreach(queen = models ) %dopar% {
+    
+    print( queen ) # Let us know on which queen we are on now
+    
+    # TODO add as a functionality 
+    
+    # # Check if queen is "RF Inf" or "Lasso Inf"
+    # if (queen == "RF Inf" || queen == "Lasso Inf || queen == "XGBOOST S" || queen == "XGBOOST R") {
+    #   next  # Skip this iteration in Analog
+    #   #return(NULL)  # Skip iteration in Parallel
+    # }
+    
+    # Only include ATE, OLS, RF CMR, Lasso MCM EA, and XGBOOST T as queens
+    remove_queen = c( "RF Inf", "RF MOM IPW","RF MOM DR",
+                      "CF","CF LC","CDML","Lasso Inf",
+                      "Lasso CMR","Lasso MOM IPW","Lasso MOM DR", "Lasso MCM",
+                      "Lasso RL", "XBART", "XGBOOST S", "XGBOOST T", "BART T", "KERN R")
+    remove_queen = c( "RF Inf", "Lasso Inf")
+    
+    if (queen %in% remove_queen) {
+      next  # Skip this iteration in Analog
+      #return(NULL)  # Skip iteration in Parallel
+    }
+    
+    # Load baseline data (now it is basically our test set)
+    baseline_object = load_baseline_data_from_disk( dataset )
+    baseline_seed_synthpop = baseline_object$seed_synthpop # Seed used to create covariates
+    baseline_Y0_seed = baseline_object$Y0_seed # Seed used to create outcomes
+    baseline_data = baseline_object$Data # Data consisting of covariates and Y0
+    
+    # Make sure there are no missing in outcome
+    realdata <- realdata[ !is.na( realdata[[outcome]] ), ]
+    
+    tau_name = paste( outcome, "_tau", sep = "" )
+    
+    # Add treatment affects (tau and Y1) and treatment assignment to the baseline data
+    baseline_full = add_treatment_effects ( seed = baseline_Y0_seed, # The same seed used to produce Y0 in this data
+                                            covariate_set = core_covariates_Y1, # Small covariate set
+                                            baseline = baseline_data, # Data to which we want to add Y1 and IATE
+                                            outcome = outcome, # Outcome name
+                                            treatment = treatment, # Treatment assignment variable name
+                                            realdata = realdata, # Real dataset
+                                            queen = queen, # Current queen
+                                            p_tx = p_tx, # Proportion treated
+                                            sd_Y0_real = sd_Y0_real, # SD of Y0 in real data
+                                            ATE_real = ATE_real # ATE in real data
+    )
+    
+
+    # Create a new data frame 'test_set' with the first 10,000 rows
+    test_set = baseline_full[1:size_test, ]
+    
+    # Remove the first 10,000 rows from 'baseline_full' to keep them as test data
+    baseline_remainder = baseline_full[-( 1:size_test ), ]
+    
+    # Run simulation
+    sim_data = perform_simulation( S = S,
+                                   test_set = test_set,
+                                   baseline_remainder = baseline_remainder,
+                                   p_tx = p_tx,
+                                   size_train = size_train,
+                                   outcome = outcome,
+                                   treatment = treatment,
+                                   covariates = covariates,
+                                   include_RF = include_RF,
+                                   include_Lasso = include_Lasso,
+                                   include_Xbart = include_Xbart,
+                                   include_CDML = include_CDML,
+                                   include_XGBOOST = include_XGBOOST,
+                                   include_BART = include_BART,
+                                   sd_Y0_real = sd_Y0_real, # SD of Y0 in real data
+                                   ATE_real = ATE_real # ATE in real data
+                                   )
+    
+    # Extract True Tau from the test set
+    array_result <- as.matrix(test_set[[tau_name]])
+    vector_result <- as.vector(array_result)
+    tau_test = vector_result
+    
+    # Calculate bias, se, rmse
+    results = process_sim_results(sim_data = sim_data, tau = tau_test )
+    results$queen = queen
+    
+    runtime_predict = sim_data[[2]]
+
+
+    runtime_predict = cbind(runtime_predict, queen )
+    # Row indices
+    row_indices <- 1:nrow(runtime_predict)
+    # Add the row indices as a new column to the existing matrix
+    runtime_predict <- cbind(runtime_predict, index = row_indices)
+    
+    #For Parallel
+    #list(results = results, runtime_predict = runtime_predict)
+
+    # Append the result dataframe to the list for Analog
+    #result_list[[queen]] <- results
+    result_list[[queen]] <- list(results = results, runtime_predict = runtime_predict)
+  }
+  
+  # Extract "results" components using lapply
+  processed_results_list <- lapply(result_list, function(x) if (!is.null(x$results)) x$results else NULL)
+  # Filter out NULL elements (in case there were elements where "results" was NULL)
+  processed_results_list <- processed_results_list[!sapply(processed_results_list, is.null)]
+  #Stack all dataframes vertically
+  stacked_result <- do.call(rbind, processed_results_list)
+
+  
+  # Extract "runtime_predict" components using lapply
+  runtime_predict_list <- lapply(result_list, function(x) if (!is.null(x$runtime_predict)) x$runtime_predict else NULL)
+  # Filter out NULL elements (in case there were elements where "runtime_predict" was NULL)
+  runtime_predict_list <- runtime_predict_list[!sapply(runtime_predict_list, is.null)]
+  #Stack all dataframes vertically
+  stacked_runtime <- do.call(rbind, runtime_predict_list) 
+  
+
+  
+  return( list( stacked_result, stacked_runtime ))
+
+}
+```
+
+
+# Without parallel processing
+
+```{r}
+test_start_time = Sys.time()
+output4 = perform_simulation_launcher(S = 3, dataset = "ca", realdata = ca_subset_imputed, cov_set_size = "small", outcome_index = 1,  include_RF = TRUE, include_Lasso = TRUE, include_Xbart = FALSE, include_CDML = TRUE, include_XGBOOST = TRUE, include_BART = TRUE)
+test_end_time = Sys.time()
+```
+
+
+```{r}
+x = output4[[2]]
+runtime_df_by_model_queen = as.data.frame(x)
+```
+
+```{r}
+# Assuming 'df' is your data frame
+
+# Get the column names except for "queen"
+cols_to_convert <- setdiff(names(runtime_df_by_model_queen), "queen")
+
+# Convert all columns (except "queen") to numeric
+runtime_df_by_model_queen[cols_to_convert] <- lapply(runtime_df_by_model_queen[cols_to_convert], as.numeric)
+```
+
+```{r}
+runtime_df_by_model = runtime_df_by_model_queen %>%
+  group_by(queen) %>%
+  summarise(across(.cols = -index, .fns = mean, na.rm = TRUE))
+```
+
+# with additional queens
+
+```{r}
+test_start_time = Sys.time()
+output6 = perform_simulation_launcher(S = 3, dataset = "ca", realdata = ca_subset_imputed, cov_set_size = "small", outcome_index = 1,  include_RF = TRUE, include_Lasso = TRUE, include_Xbart = FALSE, include_CDML = TRUE, include_XGBOOST = TRUE, include_BART = TRUE)
+test_end_time = Sys.time()
+```
+
+
+
+```{r}
+x2 = output6[[2]]
+runtime_df_by_model_queen2 = as.data.frame(x2)
+```
+
+```{r}
+# Assuming 'df' is your data frame
+
+# Get the column names except for "queen"
+cols_to_convert <- setdiff(names(runtime_df_by_model_queen2), "queen")
+
+# Convert all columns (except "queen") to numeric
+runtime_df_by_model_queen2[cols_to_convert] <- lapply(runtime_df_by_model_queen2[cols_to_convert], as.numeric)
+```
+
+```{r}
+runtime_df_by_model2 = runtime_df_by_model_queen2 %>%
+  group_by(queen) %>%
+  summarise(across(.cols = -index, .fns = mean, na.rm = TRUE))
+```
+
+```{r}
+test_start_time = Sys.time()
+output7 = perform_simulation_launcher(S = 3, dataset = "ca", realdata = ca_subset_imputed, cov_set_size = "small", outcome_index = 1,  include_RF = TRUE, include_Lasso = TRUE, include_Xbart = FALSE, include_CDML = TRUE, include_XGBOOST = TRUE, include_BART = TRUE)
+test_end_time = Sys.time()
+time_sim = test_end_time - test_start_time
+
+# Connect to the path to where you will craete a new folder for your output
+output_path_name = find_path( path=output_path )[1]
+
+# CHANGE:: Put the folder path to the folder you want to store the raw simulation output in (Outside of the repository)
+# REMEMBER:: You need to manually create that folder each time 
+folder_name = paste0( "/test", "/" )
+
+# Define the file path for saving the files
+file_path = paste0( output_path_name, folder_name )
+
+
+save( time_sim, file = paste0( file_path, "time_sim.RData" ) ) # CHANGE:: Chenge name if saving more than one sim in one folder
+
+save( output7, file = paste0( file_path, "output7.RData" ) ) # CHANGE:: Change to your object and name
+
+
+```
+
+
+
+```{r}
+x2 = output7[[2]]
+runtime_df_by_model_queen2 = as.data.frame(x2)
+```
+
+```{r}
+# Assuming 'df' is your data frame
+
+# Get the column names except for "queen"
+cols_to_convert <- setdiff(names(runtime_df_by_model_queen2), "queen")
+
+# Convert all columns (except "queen") to numeric
+runtime_df_by_model_queen2[cols_to_convert] <- lapply(runtime_df_by_model_queen2[cols_to_convert], as.numeric)
+```
+
+```{r}
+runtime_df_by_model2 = runtime_df_by_model_queen2 %>%
+  group_by(queen) %>%
+  summarise(across(.cols = -index, .fns = mean, na.rm = TRUE))
+```
+
+
+
+
+```{r}
+test_start_time = Sys.time()
+output8 = perform_simulation_launcher(S = 3, dataset = "ca", realdata = ca_subset_imputed, cov_set_size = "small", outcome_index = 1,  include_RF = TRUE, include_Lasso = TRUE, include_Xbart = FALSE, include_CDML = TRUE, include_XGBOOST = FALSE, include_BART = FALSE)
+test_end_time = Sys.time()
+time_sim = test_end_time - test_start_time
+
+# Connect to the path to where you will craete a new folder for your output
+output_path_name = find_path( path=output_path )[1]
+
+# CHANGE:: Put the folder path to the folder you want to store the raw simulation output in (Outside of the repository)
+# REMEMBER:: You need to manually create that folder each time 
+folder_name = paste0( "/test", "/" )
+
+# Define the file path for saving the files
+file_path = paste0( output_path_name, folder_name )
+
+
+save( time_sim, file = paste0( file_path, "time_sim.RData" ) ) # CHANGE:: Chenge name if saving more than one sim in one folder
+
+save( output8, file = paste0( file_path, "output8.RData" ) ) # CHANGE:: Change to your object and name
+
+
+```
+
+
+```{r}
+x2 = output8[[2]]
+runtime_df_by_model_queen2 = as.data.frame(x2)
+```
+
+```{r}
+# Assuming 'df' is your data frame
+
+# Get the column names except for "queen"
+cols_to_convert <- setdiff(names(runtime_df_by_model_queen2), "queen")
+
+# Convert all columns (except "queen") to numeric
+runtime_df_by_model_queen2[cols_to_convert] <- lapply(runtime_df_by_model_queen2[cols_to_convert], as.numeric)
+```
+
+```{r}
+runtime_df_by_model2 = runtime_df_by_model_queen2 %>%
+  group_by(queen) %>%
+  summarise(across(.cols = -index, .fns = mean, na.rm = TRUE))
+```
+
+```{r}
+test_start_time = Sys.time()
+output9 = perform_simulation_launcher(S = 3, dataset = "ca", realdata = ca_subset_imputed, cov_set_size = "small", outcome_index = 1,  include_RF = TRUE, include_Lasso = TRUE, include_Xbart = FALSE, include_CDML = TRUE, include_XGBOOST = FALSE, include_BART = TRUE)
+test_end_time = Sys.time()
+time_sim = test_end_time - test_start_time
+
+# Connect to the path to where you will craete a new folder for your output
+output_path_name = find_path( path=output_path )[1]
+
+# CHANGE:: Put the folder path to the folder you want to store the raw simulation output in (Outside of the repository)
+# REMEMBER:: You need to manually create that folder each time 
+folder_name = paste0( "/test", "/" )
+
+# Define the file path for saving the files
+file_path = paste0( output_path_name, folder_name )
+
+
+save( time_sim, file = paste0( file_path, "time_sim.RData" ) ) # CHANGE:: Chenge name if saving more than one sim in one folder
+
+save( output9, file = paste0( file_path, "output9.RData" ) ) # CHANGE:: Change to your object and name
+
+
+```
+
+
+
+```{r}
+x2 = output9[[2]]
+runtime_df_by_model_queen2 = as.data.frame(x2)
+```
+
+```{r}
+# Assuming 'df' is your data frame
+
+# Get the column names except for "queen"
+cols_to_convert <- setdiff(names(runtime_df_by_model_queen2), "queen")
+
+# Convert all columns (except "queen") to numeric
+runtime_df_by_model_queen2[cols_to_convert] <- lapply(runtime_df_by_model_queen2[cols_to_convert], as.numeric)
+```
+
+```{r}
+runtime_df_by_model2 = runtime_df_by_model_queen2 %>%
+  group_by(queen) %>%
+  summarise(across(.cols = -index, .fns = mean, na.rm = TRUE))
+```
+
+```{r}
+test_start_time = Sys.time()
+output10 = perform_simulation_launcher(S = 3, dataset = "ca", realdata = ca_subset_imputed, cov_set_size = "small", outcome_index = 1,  include_RF = TRUE, include_Lasso = TRUE, include_Xbart = FALSE, include_CDML = TRUE, include_XGBOOST = TRUE, include_BART = FALSE)
+test_end_time = Sys.time()
+time_sim = test_end_time - test_start_time
+
+# Connect to the path to where you will craete a new folder for your output
+output_path_name = find_path( path=output_path )[1]
+
+# CHANGE:: Put the folder path to the folder you want to store the raw simulation output in (Outside of the repository)
+# REMEMBER:: You need to manually create that folder each time 
+folder_name = paste0( "/test", "/" )
+
+# Define the file path for saving the files
+file_path = paste0( output_path_name, folder_name )
+
+
+save( time_sim, file = paste0( file_path, "time_sim.RData" ) ) # CHANGE:: Chenge name if saving more than one sim in one folder
+
+save( output10, file = paste0( file_path, "output10.RData" ) ) # CHANGE:: Change to your object and name
+
+
+```
+
+
+
+```{r}
+x2 = output10[[2]]
+runtime_df_by_model_queen2 = as.data.frame(x2)
+```
+
+```{r}
+# Assuming 'df' is your data frame
+
+# Get the column names except for "queen"
+cols_to_convert <- setdiff(names(runtime_df_by_model_queen2), "queen")
+
+# Convert all columns (except "queen") to numeric
+runtime_df_by_model_queen2[cols_to_convert] <- lapply(runtime_df_by_model_queen2[cols_to_convert], as.numeric)
+```
+
+```{r}
+runtime_df_by_model2 = runtime_df_by_model_queen2 %>%
+  group_by(queen) %>%
+  summarise(across(.cols = -index, .fns = mean, na.rm = TRUE))
+```
+
+
+
+```{r}
+test_start_time = Sys.time()
+output11 = perform_simulation_launcher(S = 3, dataset = "ca", realdata = ca_subset_imputed, cov_set_size = "small", outcome_index = 1,  include_RF = FALSE, include_Lasso = FALSE, include_Xbart = FALSE, include_CDML = FALSE, include_XGBOOST = TRUE, include_BART = FALSE)
+test_end_time = Sys.time()
+time_sim = test_end_time - test_start_time
+
+# Connect to the path to where you will craete a new folder for your output
+output_path_name = find_path( path=output_path )[1]
+
+# CHANGE:: Put the folder path to the folder you want to store the raw simulation output in (Outside of the repository)
+# REMEMBER:: You need to manually create that folder each time 
+folder_name = paste0( "/test", "/" )
+
+# Define the file path for saving the files
+file_path = paste0( output_path_name, folder_name )
+
+
+save( time_sim, file = paste0( file_path, "time_sim.RData" ) ) # CHANGE:: Chenge name if saving more than one sim in one folder
+
+save( output11, file = paste0( file_path, "output11.RData" ) ) # CHANGE:: Change to your object and name
+
+
+```
+
+
+
+
+```{r}
+xgboost_s_alg = function( x_tr, y_tr, d_tr, x_val ) {
+  fit_tau = sboost(x_tr, d_tr, y_tr, verbose = FALSE)
+  iate = predict(fit_tau, newx = x_val)
+  return( iate )
+}
+
+xgboost_t_alg = function( x_tr, y_tr, d_tr, x_val ) {
+  fit_tau = tboost(x_tr, d_tr, y_tr, verbose = FALSE)
+  iate = predict(fit_tau, newx = x_val)
+  return( iate )
+}
+
+xgboost_r_alg = function( x_tr, y_tr, d_tr, x_val ) {
+
+  fit_tau = rboost(x_tr, d_tr, y_tr, verbose = FALSE)
+  iate = predict(fit_tau, newx = x_val)
+  return( iate )
+}
+```
+
+
+
+
+```{r}
+test_start_time = Sys.time()
+output12 = perform_simulation_launcher(S = 3, dataset = "ca", realdata = ca_subset_imputed, cov_set_size = "small", outcome_index = 1,  include_RF = FALSE, include_Lasso = FALSE, include_Xbart = FALSE, include_CDML = FALSE, include_XGBOOST = TRUE, include_BART = FALSE)
+test_end_time = Sys.time()
+time_sim = test_end_time - test_start_time
+
+# Connect to the path to where you will craete a new folder for your output
+output_path_name = find_path( path=output_path )[1]
+
+# CHANGE:: Put the folder path to the folder you want to store the raw simulation output in (Outside of the repository)
+# REMEMBER:: You need to manually create that folder each time 
+folder_name = paste0( "/test", "/" )
+
+# Define the file path for saving the files
+file_path = paste0( output_path_name, folder_name )
+
+
+save( time_sim, file = paste0( file_path, "time_sim.RData" ) ) # CHANGE:: Chenge name if saving more than one sim in one folder
+
+save( output12, file = paste0( file_path, "output12.RData" ) ) # CHANGE:: Change to your object and name
+
+
+```
+
+
