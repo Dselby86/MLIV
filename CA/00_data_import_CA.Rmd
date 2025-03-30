@@ -1,0 +1,410 @@
+---
+title: "MLIV - Data Import - CA"
+subtitle: "Investigating the Potential of Machine Learning Methods for Identifying Impact Variation in Randomized Control Trials"
+author: "Polina Polskaia"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    df_print: paged
+    fig_caption: yes
+    fig_height: 8
+    fig_width: 10
+    highlight: pygments
+    theme: spacelab
+    toc: yes
+    toc_depth: 6
+    toc_float: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r include=FALSE}
+#' Colorize function
+#'  
+#' What? To modify color of the text in an html output.
+#' How to use? Insert in line r code for coloring texts.
+#'
+#' @param x input text string
+#' @param color specified color of the text string
+#'
+#' @return
+#' @export
+#' @author Lifted from Stackoverflow by Zarni Htet, CDI
+#' @note To do Enhancement: Coloring to github_document, pdf_document, word_document by manipulating the underlying encodings
+#' @examples
+colorize <- function(x, color) {
+  
+  # if we have a latext output, color the text string
+  if (knitr::is_latex_output()) {
+    sprintf("\\textcolor{%s}{%s}", color, x)  # Latex format to capture text
+  } else if (knitr::is_html_output()) {
+    sprintf("<span style='color: %s;'>%s</span>", color, # html format to capture text
+            x)
+  } else x
+} # end of colorize function
+
+```
+
+# Project Description
+
+The goal of the MLIV project is to investigate the value and limitations of using machine learning to detect the presence of heterogeneous subgroup impacts in randomized control trials (RCTs) in education and other policy domains.
+
+The research team will use machine learning to conduct a secondary analysis of data from Career Academies, Growth Mindset, and the Accelerated Studies in Associate Program at CUNY and Ohio. With the secondary analysis, the researchers will determine whether machine learning replicates the findings of the original analyses and whether it identifies additional and theoretically meaningful subgroup effects not identified by the original analyses. The team will also conduct a simulation study to investigate the circumstances under which the machine learning approach would be potentially more useful in multi-site RCTs than conventional subgroup analyses. The products of the grant include user-friendly R software for conducting machine learning subgroup analysis for RCTs, an instructional webinar for using the software, a conference presentation, and two research papers.
+
+# Objetive
+
+In this import Notebook for MLIV, we:
+
+-   Read and inspect Career Academies data.
+-   Identify the variables of interest.
+-   Confirm that we have the correct data file and all required variables are present.
+-   Inspect the data and identify instances where the data needs to be cleaned.
+-   Run descriptive statistics for all variables of interest.
+-   Create a codebook.
+-   Save the subset of the data.
+
+
+# Set up
+
+We import the required libraries and specify file paths below.
+
+```{r message=FALSE, warning=FALSE}
+# Warnings and messages are hidden for this chunk.
+
+# Load libraries required 
+library(readr)           # to import most common file types
+library(readxl)          # to import Excel files
+library(haven)           # to import SAS files
+library(dplyr)           # to inspect the data
+library(lubridate)       # to deal with dates
+library(stringr)         # to work with strings
+library(here)            # to work with directories
+library(Hmisc)           # to print variables' labels
+library(labelled)        # to output labels
+library(DT)              # for pretty tables
+library(summarytools)    # for pretty codebook
+library(corrplot)        # for the correlation matrix
+```
+
+```{r}
+# Specify directory paths
+datadir <- "/data/share/cdi/MLIV/Data/"        # data directory
+cadir <- "CA/"                                 # Career Academies data folder
+outputcadir <- "Real/"                     # Career Academies output data folder
+datafil<-"caeqs2"                              # Career Academies data file name
+```
+
+# Import data
+
+```{r}
+# Create new path from the above for reading in data
+ca <- as.data.frame(read_sas(paste0(datadir, cadir, datafil, ".sas7bdat")))  # load Career Academies data
+```
+
+```{r}
+# Inspect the first few rows
+#head(ca)            # Commented out to hide the data in the HTML
+```
+
+We have a high dimensional dataset, where the number of rows and columns are equal to:
+
+```{r}
+# Print the number of rows and columns
+dim(ca)    # sample size                 
+```
+
+*Notes on sample size:* Rachel pointed out that there are a few different samples that were used across different years of the analysis and it took her and Dakota some time to figure out which was which. This file (1764 records) omits 188 students from a site that left the study. We don't have most demographic or income information for those students. The current file matches the 1764 full study sample mentioned in this [report](https://www.mdrc.org/sites/default/files/full_49.pdf). If we want to include the 188 students, we can do that, we'll just have to merge together a couple different CA files to pull together something with all the variables and observations we want.
+
+# Find variables
+
+## Output labels for all of the variables
+
+Look at all of the variables' labels:
+
+```{r}
+# Print all variables and their labels
+#contents(ca) # Prints labels for 6K variables 
+```
+
+
+```{r}
+# Print all variables and their labels in a small searchable table
+x = look_for(ca, details = "none")
+datatable(x)
+```
+
+
+
+
+## Identify potential variables
+
+I colorized the text so it is easier to navigate and see the variable we already found and confirmed. Here are the meanings for the color palette:
+
+-   `r colorize("Purple indicates that the correct variable is not found yet", "purple")`;
+-   `r colorize("Red indicates a question or a comment from PP about variables that are not found/confirmed yet", "red")`;
+-   `r colorize("Orange indicates that PP is pretty sure that this the correct variable was found, however it needs final confirmation", "orange")`;
+-   `r colorize("Green indicates that PP 100% sure about the variable chosen, but it is not confirmed", "green")`;
+-   `r colorize("Blue indicates that the variable is confirmed", "blue")`;
+
+The variables we need to find according to [this](https://mdrc365.sharepoint.com/:x:/r/sites/MachineLearningandCausalInferenceMethods/_layouts/15/Doc.aspx?sourcedoc=%7BA7DB160A-D489-47AC-ACDE-680386AE0B0A%7D&file=MLIV%20variables%20in%20proposed%20datasets.xlsx&action=default&mobileredirect=true&cid=5d1a48b0-44b3-4538-9650-6f2e871b6fbd) spreadsheet:
+
+-   **Outcomes**
+    -   `r colorize("Avg Monthly Earnings", "green")`:
+        -   `Y18JBERNA_06` (Label: YRS 1-8: AVG MONTHLY EARNINGS IN 2006 DOLLARS (LQ & EQ DATA), continuous) 
+        -   `EQJBERNA_06` (Label: EQ: AVG MONTHLY EARNINGS IN 2006 DOLLARS, MONTHS 49-96, continuous) 
+    -   `r colorize("Ever employed", "green")`:
+        -   ` EQJBVEMP` (Label: EQ: EVER EMPLOYED (MOS 49-96), dummy) 
+    -   `r colorize("Ever employed full-time", "green")`:
+        -   ` EQJBVEFT` (Label: EQ: EVER EMPLOYED (MOS 49-96), dummy)
+    -   `r colorize("Months employed", "green")`:
+        -   ` EQJBMEMP` (Label: EQ: MONTHS EMPLOYED (MOS 49-96), continuous) 
+    -   `r colorize("Months employed full-time", "green")`:
+        -   ` EQJBMEFT` (Label: EQ: MONTHS EMPLOYED FULL-TIME (MOS 49-96), continuous) 
+    -   `r colorize("Attendance", "purple")`:
+        -   `r colorize("Too many of these, which one do we need, oveeall, by grade, by year?", "red")`
+    -   `r colorize("Academic course-taking", "purple")`:
+        -   `r colorize("What are we looking for here? How many credits, courses were taken? Overall, by year?", "red")`
+    -   `r colorize("The likelihood of earning enough credits to graduate on time", "purple")`
+        -   `r colorize("Do not see a variable for this. Do we need to construct one? From which variables?", "red")`
+    -   `r colorize("The likelihood of graduating on time", "purple")`
+        -   `r colorize("Do not see a variable for this. Do we need to construct one? From which variables?", "red")`
+    -   `r colorize("Standardized math and reading achievement test scores", "purple")`
+        -   `r colorize("Do not see a variable for this. Do we need to construct one? From which variables?", "red")`
+-   **Covariates**
+    -   `r colorize("Gender", "blue")`:
+        -   `FEMALE` (Label: FEMALE; Value Labels: 0 - Male, 1 - Female) 
+    -   `r colorize("Age of the student at the time of application", "blue")`:
+        -   `AGE` (Label: Age at RA ((RADATE-B_DATE)/365.25) 
+    -   `r colorize("Race/Ethnicity", "blue")`:
+        -   `ETHNIC` (Label: Ethnicity; Value Labels: 1 - Hispanic, 2 - Black, 3 - White, 4 - Asian/Native American) 
+    -   `r colorize("Student speaks limited English", "blue")`:
+        -   `LEP` (Label: STUDENT LIMITED ENGLISH PROFICIENT Z210)
+    -   `r colorize("Students live with Mother and Father, Mother/Father only, Other", "blue")`:
+        -   `PARENT` (Label: WHO STUDENT LIVES WITH K3; Value Labels: 1  - MOTH AND FATH, 2 - MOTHER ONLY, 3 FATHER ONLY, 4- OTH FAM/NREL) 
+    -   `r colorize("Student lives in single-parent household", "blue")`
+        -   `ONEPARNT` (Label: RISK FACTOR: SINGLE PAR HH Z3326,  Value Labels: 0 - No, 1 - Yes) 
+    -   `r colorize("Father's education level", "blue")`:
+        -   `edfath` (Label: Fathers education level K5; Values Labels: 1 - FATHER DID NOT FINISH HIGH SCHOOL, 2 - FATHER RECEIVED A GED, 3 - FATHER IS A HIGH SCHOOL GRADUATE, 4 - FATHER TOOK SOME POST-HS COURSES, 5 - FATHER IS A COLLEGE GRADUATE) 
+    -   `r colorize("Mother's education level", "blue")`:
+        -   `edmoth` (Label: Mothers education level K5; Values Labels: 1 - MOTHER DID NOT FINISH HIGH SCHOOL, 2 - MOTHER RECEIVED A GED, 3 - MOTHER IS A HIGH SCHOOL GRADUATE, 4 - MOTHER TOOK SOME POST-HS COURSES, 5 - MOTHER IS A COLLEGE GRADUATE) 
+    -   `r colorize("Neither parent has high school diploma", "blue")`:
+        -   `PARNHS` (Label: NEITHER PARENT HAS HS DIPLOMA,  Value Labels: 0 - No, 1 - Yes)
+    -   `r colorize("Parental work", "blue")`:
+        -   `PARWORK` (Label: PARENTS WORK FOR PAY,  Values Labels: 1 - Both parents work, 2 - Father works, 3 - Mother works, 4 - Neither parent works) 
+    -   `r colorize("Family receives welfare or food stamps", "green")`:
+        -   `WELFFS` (Label: FAMILY HAS RECEIVED WELFARE OR FS Z5761,  Value Labels: 0 - No, 1 - Yes) `r colorize("Pretty sure it is this one as it covers both food stamps and welfare. Other options are presented below.", "green")`
+    -   `r colorize("Family mobility in past two years", "blue")`:
+        -   `MOVED` (Label: \# TIMES FAM MOVED PAST 2YRS (CAT) K2; Value Labels: 1 - Have not moved, 2 - Moved 1 or 2 times, 3 - Moved 3 or more times IN PAST 2 YRS)
+    -   `r colorize("Student is home alone more than 3 hours per day", "blue")`:
+        -   `UNSUPGT3` (Label: STUDENT IS UNSUPERVISED \> 3HRS/DAY Z3521,  Value Labels: 0 - No, 1 - Yes) 
+    -   `r colorize("8th-grade math test score", "blue")`:
+        -   `MATHCAT` (Label: 8TH GR. MATH TEST SCORE (%ILE CAT), Value Labels: 1- 75th percentile or higher, 2 - 50th to 74th percentile, 3 - 25th to 49th percentile, 4 - 24th percentile or lower) 
+    -   `r colorize("8th-grade reading test score", "blue")`:
+        -   `READCAT` (Label: 8TH GR. READ TEST SCORE (%ILE CAT), Value Labels: 1- 75th percentile or higher, 2 - 50th to 74th percentile, 3 - 25th to 49th percentile, 4 - 24th percentile or lower)  
+    -   `r colorize("Student does not feel safe at school", "blue")`:
+        -   `UNSAFSCH` (Label: STUDENT FEELS UNSAFE AT SCHOOL Z3551,  Value Labels: 0 - No, 1 - Yes) 
+    -   `r colorize("Frequency of cutting classes", "blue")`:
+        -   `CUTCLS` (Label: FREQUENCY OF CUTTING CLASS (CAT), Value labels: 0 - Never, 1 - At least 1/Wk, 2 - Daily) 
+    -   `r colorize("Sent to office for misbehavior", "blue")`:
+        -   `OFFICE` (Label: SENT TO OFFICE - MISBEHAV (CAT), Value Labels: 0 – Never, 1 – 1 or 2 times,  2 - 3 to 10 times)
+    -   `r colorize("Post-Secondary Educational Expectations", "blue")`:
+        -   `PSEDEXP ` (Label: Post-Secondary educational
+ expectations, Value labels: 1 - Does not expect to graduate from college, 2 - Graduate from college, 3 - Attend higher level of school after college)  
+    -   `r colorize("Hours per week spent on homework", "blue")`:
+        -   `HRSHW` (Label: HOURS/WEEK SPENT ON HOMEWORK (CAT), Value Labels: 1 - Zero, 2- 1 hour or less, 3 - 2-3 hours, 4 - 4-6 hours, 5 - 7 hours or more) - 
+    -   `r colorize("Hours per day spent watching TV", "blue")`:
+        -   `HRSTV` (Label: HOURS/DAY WATCHING TV (CAT): Values Labels: 1 - HOURS/DAY WATCHING TV - \< 1, 2 - HOURS/DAY WATCHING TV - 1 TO 2, 3 - HOURS/DAY WATCHING TV - 2 TO 3, 4 - HOURS/DAY WATCHING TV - MORE THN 3) 
+    -   `r colorize("Student has worked for pay", "blue")`:
+        -   `VEMPP` (Label: STUDENT EVER WORKED FOR PAY Z3361, Value Labels: 0 - No, 1 - Yes) 
+    -   `r colorize("Attendance Rate, in 8th grade", "blue")`:
+        -   `ATRAGR08` (Label: ATTENDANCE RATE - GRADE 8, continuous) 
+    -   `r colorize("Attendance Rate, year of random assignment", "blue")`:
+        -   `ATRATCP1` (Label: ATTENDANCE RATE - YEAR OF RA, continuous)  
+    -   `r colorize("The number of credits earned toward graduation in the year the student applied for an Academy", "red")`:
+        -   `CREDYRP1` (Label: CREDITS EARNED (COMP): RA YEAR, continuous) 
+    -   `r colorize("Grade point average, year of random assignment", "blue")`:
+        -   `GPCTYRP1` (Label: GPA (CAT): RA YEAR, Value Labels: 1 - 2.0 or lower, 2 - 2.1-3.0, 3 - 3.1 or higher, 4 - 4.0) 
+        -   `GPAYRP1` (Label: GPA (CONT): RA YEAR)
+    -   `r colorize("Students is overage for grade level", "blue")`:
+        -   `OVERAGE` (Label: STUDENT IS OVERAGE FOR GRADE LEVEL, Value Labels: 0 - No, 1 - Yes) 
+    -   `r colorize("Students transferred schools 2 or more times", "blue")`:
+        -   `SCHLTRAN` (Label: TRANSFERRED SCHOOLS 2+ TIMES, Value Labels: 0 - No, 1 - Yes) 
+    -   `r colorize("Student has sibling who dropped out of high school", "blue")`:
+        -   `SIBDROP` (Label: HAS SIBLING HS DROP OUT, Value Labels: 0 - No, 1 - Yes) 
+    -   `r colorize("Risk of dropping out of high school", "blue")`:
+        -   `DROPPRB` (Label: PRED PROB DROPOUT FRM BASELINE VARS, continuous) 
+    -   `r colorize("Risk group", "purple")`:
+        -   `RRISK3`
+
+Additional variables that we might want to keep (suggested by PP):
+
+-   `r colorize("Cohort", "purple")`: `COHORT`
+-   `r colorize("Site", "purple")`: `SITE` 
+-   `r colorize("Assignment status", "purple")`: `TREATMNT`
+
+
+## Subset to the list of variables
+
+Currently, I am throwing in the list most of the potential variables indicated above.
+
+```{r}
+
+ca_subset<-ca[,c(
+  
+  # HELPER VARIABLES
+  "SITE",            # HOST HS FOR CAREER ACADEMIES
+  "TREATMNT",        # ASSIGNMENT STATUS: TREATMENT GROUP
+  "COHORT",          # Random Assignment Cohort
+  
+  # OUTCOME VARIABLES  
+  "Y18JBERNA_06",    # YRS 1-8: AVG MONTHLY EARNINGS IN 2006 DOLLARS (LQ & EQ DATA)
+  "EQJBVEMP",        # EQ: EVER EMPLOYED (MOS 49-96)
+  "EQJBVEFT",        # EQ: EVER EMPLOYED FULL-TIME (MOS 49-96)
+  "EQJBMEMP",        # EQ: MONTHS EMPLOYED (MOS 49-96)
+  "EQJBMEFT",        # EQ: MONTHS EMPLOYED FULL-TIME (MOS 49-96)
+  "EQJBERNA_06",     # EQ: AVG MONTHLY EARNINGS IN 2006 DOLLARS, MONTHS 49-96
+  
+  #COVARIATES
+  "FEMALE",          # FEMALE
+  "AGE",             # AGE
+  "ETHNIC",          # Ethnicity; Value Labels
+  "LEP",             # STUDENT LIMITED ENGLISH PROFICIENT
+  "PARENT",          # WHO STUDENT LIVES WITH K3
+  "ONEPARNT",        # RISK FACTOR: SINGLE PAR HH
+  "edfath",          # Fathers education level K5
+  "edmoth",          # Mothers education level K5
+  "PARNHS",          # NEITHER PARENT HAS HS DIPLOMA
+  "PARWORK",         # PARENTS WORK FOR PAY K5
+  "WELFFS",          # FAMILY HAS RECEIVED WELFARE OR FS
+  "MOVED",           # # TIMES FAM MOVED PAST 2YRS (CAT) K2
+  "UNSUPGT3",        # STUDENT IS UNSUPERVISED > 3HRS/DAY
+  "MATHCAT",         # 8TH GR. MATH TESTS SCORE (%ILE CAT)
+  "READCAT",         # 8TH GR. READ TESTS SCORE (%ILE CAT)
+  "UNSAFSCH",        # STUDENT FEELS UNSAFE AT SCHOOL
+  "CUTCLS",          # FREQUENCY OF CUTTING CLASS (CAT)
+  "OFFICE",          # SENT TO OFFICE - MISBEHAV (CAT)
+  "PSEDEXP",         # PSED EXPECTATIONS AT BASELINE
+  "HRSHW",           # HOURS/WEEK SPENT ON HOMEWORK (CAT)
+  "HRSTV",           # HOURS/DAY WATCHING TV (CAT)
+  "VEMPP",           # STUDENT EVER WORKED FOR PAY Z3361
+  #"ATRAGR08",        # ATTENDANCE RATE - GRADE 8
+  "ATRATCP1",        # ATTENDANCE RATES: BASELINE
+  "CREDYRP1",        # CREDITS EARNED (COMP): RA YEAR
+  #"GPCTYRP1",       # GPA (CAT): RA YEAR
+  "GPAYRP1",         # GPA (CONT): RA YEAR
+  "OVERAGE",         # STUDENT IS OVERAGE FOR GRADE LEVEL
+  "SCHLTRAN",        # TRANSFERRED SCHOOLS 2+ TIMES
+  "SIBDROP",         # HAS SIBLING HS DROP OUT
+  "DROPPRB"          # PRED PROB DROPOUT FRM BASELINE VARS
+  
+  # SUBGROUP VARIABLES
+  
+  )]
+
+```
+
+Add interaction between SITE and COHORT
+
+```{r}
+table(ca_subset["SITE"]) 
+```
+```{r}
+table(ca_subset["COHORT"])
+```
+After looking at the values, we can say that multiplying site by cohort does not guarantee unique values for every `SITE` * `COHORT` variation.
+
+In general, two different pairs of values can multiply to give the same result. In this case, some combinations of site and cohort may produce the same result as other combinations. For example, site `6` and cohort `2` (`6 * 2 = 12`) and site `4` and cohort `3` (`4 * 3 = 12`) both produce the same result of `12`.
+
+As we need to create a unique identifier that is a number, we can concatenate the site and cohort values together and use them to create a unique numeric identifier. One way to do this is to use the formula `(site - 1) * n_cohorts + cohort`, where `n_cohorts` is the number of cohorts. This formula will produce a unique numeric identifier for each combination of site and cohort.
+
+These unique identifiers are all numeric and guaranteed to be unique for every site * cohort combination. 
+> **Note** that if the number of cohorts changes, you will need to adjust the formula accordingly.
+
+The formula would produce the following unique identifiers:
+
+- Site 6, Cohort 1: (6 - 1) * 3 + 1 = 16
+- Site 6, Cohort 2: (6 - 1) * 3 + 2 = 17
+- Site 6, Cohort 3: (6 - 1) * 3 + 3 = 18
+- Site 9, Cohort 1: (9 - 1) * 3 + 1 = 26
+- Site 9, Cohort 2: (9 - 1) * 3 + 2 = 27
+- Site 9, Cohort 3: (9 - 1) * 3 + 3 = 28
+- Site 18, Cohort 1: (18 - 1) * 3 + 1 = 52
+- Site 18, Cohort 2: (18 - 1) * 3 + 2 = 53
+- Site 18, Cohort 3: (18 - 1) * 3 + 3 = 54
+- Site 27, Cohort 1: (27 - 1) * 3 + 1 = 80
+- Site 27, Cohort 2: (27 - 1) * 3 + 2 = 81
+- Site 27, Cohort 3: (27 - 1) * 3 + 3 = 82
+- Site 45, Cohort 1: (45 - 1) * 3 + 1 = 134
+- Site 45, Cohort 2: (45 - 1) * 3 + 2 = 135
+- Site 45, Cohort 3: (45 - 1) * 3 + 3 = 136
+- Site 54, Cohort 1: (54 - 1) * 3 + 1 = 160
+- Site 54, Cohort 2: (54 - 1) * 3 + 2 = 161
+- Site 54, Cohort 3: (54 - 1) * 3 + 3 = 162
+- Site 58, Cohort 1: (58 - 1) * 3 + 1 = 174
+- Site 58, Cohort 2: (58 - 1) * 3 + 2 = 175
+- Site 58, Cohort 3: (58 - 1) * 3 + 3 = 176
+- Site 63, Cohort 1: (63 - 1) * 3 + 1 = 188
+- Site 63, Cohort 2: (63 - 1) * 3 + 2 = 189
+- Site 63, Cohort 3: (63 - 1) * 3 + 3 = 190
+- Site 72, Cohort 1: (72 - 1) * 3 + 1 = 214
+- Site 72, Cohort 2: (72 - 1) * 3 + 2 = 215
+- Site 72, Cohort 3: (72 - 1) * 3 + 3 = 216
+
+```{r}
+# Create site-cohort unique identifier
+ca_subset$SITE_COHORT <- (ca_subset$SITE - 1) * 3 + ca_subset$COHORT
+```
+
+```{r}
+# Check if worked properly
+table(ca_subset["SITE_COHORT"])
+```
+
+# Generate Codebook
+
+```{r message=FALSE, warning=FALSE}
+# Warnings and messages are hidden for this chunk.
+
+# Generate Codebook
+print(dfSummary(ca_subset,
+                varnumbers = FALSE,
+                valid.col = FALSE,
+                graph.magnif = 0.76,
+                max.distinct.values = 5),
+      method = 'render')
+```
+
+# Correlation Matrix
+
+We have a lot of `NA`s in the dataset, so we have to use pairwise correlations for those `NA`s, specified by `use="pairwise.complete.obs"`.  When specified, R computes correlations for each pair of columns using vectors formed by omitting rows with missing values on a pairwise basis. This approach is not ideal as it could potentially generate misleading results. 
+
+```{r}
+ca_cov_out <- ca_subset[ , 10:39]                                                  # Subset to only covariates and outcomes
+
+corrdata <- cor(ca_cov_out, use="pairwise.complete.obs")                          # Compute correlations
+
+corrplot(corrdata, method="color", type="upper", tl.cex = 0.5, tl.col = "black")  # Create a correlation matrix plot
+```
+We do not see much correlation between the covariates. Remember, this dataset currently includes only a few dependent variables.
+
+
+# Next steps 
+
+## Data cleaning steps
+
+-   Rachel Rosen pointed out that there was one duplicate (same student, different sample IDs, because the student moved schools) that her and Dakota found in that a couple years ago. I believe '8646990' would be the sample ID we will need to drop.
+-   Also, Rachel mentioned that not all the observations in this file may income information for all years. Maybe we can discuss as a team which observations we want to keep or drop here.
+
+
+# Export data
+
+```{r}
+#save(ca_subset, file = paste0(datadir, outputcadir, "ca_subset.RData"))
+```
+
+```{r}
+saveRDS(ca_subset, file = paste(datadir, outputcadir, "ca_subset.rds", sep="/"))
+```
+
