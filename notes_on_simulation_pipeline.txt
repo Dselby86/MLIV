@@ -1,0 +1,57 @@
+
+# Structure of the Simulation Pipeline
+
+run_simulation
+	In 08
+	1) calls perform_simulation_launcher
+	2) loops through queens and, for each queen, combines fragments to single file.  
+	3) calculate performance metrics based on the raw IATE predictions
+	4) log the simulation to the log of run simulations
+	
+	
+perform_simulation_launcher
+	In 07
+	Works on an entire list of queens (passed or generated on fly)
+	Saves results to a directory of chunks
+	gets data ready (by calling setup_simulation_data)
+		setup_simulation_data does following:
+		  loads real data (if needed)
+  		loads/generates baseline data (using real data)
+	  	loads/generates true IATEs (using real data)
+	  	returns as list of data
+		
+	divides tasks into chunks (queen x number of replicates)
+	
+	for each chunk
+		call perform_simulation
+		save the results to a "fragment" file in specific location
+		
+		
+perform_simulation
+	In 06
+	Takes test set and pool of data to sample from
+	Repeatidly:
+		Sample training data from "baseline"
+		Estimate everything on a training set and then generate the IATE estimates, runtime, and flags on being bad estimates for the held fixed test set.
+		Returns full set of results to calling method
+		
+	Structure of results: 
+	list of three 3 dimensional matrices for predictedtau, runtime, failrate
+	Each matrix is #iterations X #test points X #estimators
+	NOTE: runtime should not be in this form, but instead be 2D matrix of #iterations X #estimators.  
+	      TO DO at some point.
+		
+	 
+		
+# Core saved datasets
+
+ - real data -- This is the original dataset we are calibrating the simulation to
+ - baseline data -- This is a large dataset built from real data that has the covariate distribution we will use for the simulation
+ - IATEs -- This is a dataset with one column per queen of the IATEs for all units in the baseline dataset.  This dataset is also made from fitting the queen to the real data
+ 
+
+
+
+
+
+
