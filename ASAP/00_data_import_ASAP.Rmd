@@ -1,0 +1,538 @@
+---
+title: "MLIV THE-RCT Data Summary Statistics: Codebook and Correlations"
+output:
+  html_document:
+    df_print: paged
+    toc: yes
+    toc_float: true
+    toc_depth: '3'
+---
+
+TO DO:
+Send Pei a list of the covars 
+
+## Set up
+Set up consists of loading some useful packages and directories and filenames to use. 
+```{r setup}
+# Source function to generate file paths
+source(here::here("R/configs.R"))
+
+library("devtools")
+# Load packages
+library("labelled")
+#source(here::here("R/packages.R"))
+#library(haven)
+#library(plyr)
+#library(dplyr)
+#library(tidyverse)
+#library(tibble)
+#library(synthpop)
+#install.packages("sjlabelled")
+#library(sjlabelled)
+#library(Hmisc)
+#library(corrplot)
+
+datadir<-"/data/share/cdi/MLIV/Data/THE-RCT/"
+datafil<-"txs3s220406_redacted"
+
+odir<-"/data/share/cdi/MLIV/Data/THE-RCT/" 
+odat<-"THERCT_means"
+ 
+savdir<-"/data/share/cdi/MLIV/Data/Real/" 
+savdat<-"asap_subset"
+
+#source helper functions, none for now
+#source("/data/share/cdi/MLIV/")
+
+knitr::opts_chunk$set(rows.print=20)
+```
+
+## Read in data and write means
+In this section, the following is done: 
+
+1. Read in data
+2. Make a codebook for data
+3. Show correlations across variables.
+  
+### data
+```{r data THERCT}
+#therct_r<-as.data.frame(read_sas(paste0(datadir, datafil, ".sas7bdat")))
+#asap<-filter(therct_r, grepl("ASAP", therct_r$STSTUDY))
+
+load(paste0(odir, odat, ".Rda"))
+
+#select relative TVCRAT (>0 credits attempted) variables
+#use 'ATVCRAT' if you want to exclude intersessions
+#use 'TVCRAT' to include intersessions
+SessionVars <-names(asap[ , grepl( "^R[0-9][0-9]TVCRAT" , names( asap ) )
+           ])
+
+SessionsVars3yr <-names(asap[ , grepl( "^R0[0-6]TVCRAT" , names( asap ) )
+           ])
+
+#creating 'number of sessions enrolled' variable
+asap$SessionsEnrolled<- ( rowSums(asap[,SessionVars], na.rm=TRUE)) / 100
+asap$SessionsEnrolled3yr<- ( rowSums(asap[,SessionsVars3yr], na.rm=TRUE)) / 100
+asap$AnyEnrollment<- 1 * ( asap$SessionsEnrolled > 0 )
+asap$AnyEnrollment3yr<- 1 * ( asap$SessionsEnrolled3yr > 0 )
+table( asap$STSTUDY,asap$SessionsEnrolled3yr)
+table(asap$SessionsEnrolled, asap$AnyEnrollment)
+
+cuny = asap[asap$STSTUDY == "ASAP CUNY",]
+dim(cuny)
+ohio = asap[asap$STSTUDY == "ASAP Ohio",]
+dim(ohio)
+
+table(asap$STSTUDY, asap$SessionsEnrolled)
+
+#creating lookup tables to convert character strings to numeric values
+BLAGElookup <- c('1819' = 18.5
+          , '2021'=20.5
+          , '2224'=23
+          , '2529'=27
+          , '3034'=32
+          , '3539'=37
+          , '4049'=44.5
+          , '5064'=58
+          , 'LT18'=17
+          )
+BLCAGElookup <- c('00' = 0.5
+          , '01'=1.5
+          , '02'=2.5
+          , '03'=3.5
+          , '04'=5
+          , '06'=8
+          , '10'=13
+          , '16'=16
+          )
+
+BLWKHRlookup <- c('01_10' = 5.5
+          , '11_20'=15.5
+          , '21_30'=25.5
+          , '31_40'=35.5
+          , '40_GT'=41
+          )
+
+BLFEMALElookup <- c('FEML' = 1
+          , 'MALE'=0
+          )
+BLFULLTIMElookup <- c('FT' = 1
+          , 'PT'=0
+          )
+#BLHSGRlookup <- c('11TH' = 11
+#          , '12TH'=12
+#          , 'LE10'=10
+#          )
+#convert some categorical strings to to continuous values 
+asap$BLAGENUM = as.numeric(BLAGElookup[asap$BLAGE])
+asap$BLCAGENUM = as.numeric(BLCAGElookup[asap$BLCAGE])
+asap$BLWKHRNUM = as.numeric(BLWKHRlookup[asap$BLWKHR])
+#6-5-24: adding this line to fix CNUM
+#THE-RCT documentation says this is a continuous variable with top-coding for those with >4 children
+asap$BLCNUM = as.numeric(asap$BLCNUM)
+
+#convert categorical with only two values to a dummy
+asap$BLFEMALE = as.numeric(BLFEMALElookup[asap$BLGNDR])
+asap$BLFULLTIME = as.numeric(BLFULLTIMElookup[asap$BLCRPL])
+
+#one source for this: https://stackoverflow.com/questions/11952706/generate-a-dummy-variable
+
+#make a function that converts a string variable to continuous or categorical
+roundDigits = 5
+
+
+vars_study = c("STSTUDY",
+  #    "STXID", - dropping treatment ID since it isn't useful for our purposes
+      "STSITE",
+      "STCOHORT",
+      "STXCOHORT",
+      "STRA_CODE",
+      "STRA_DATE",
+      "STRA_BLOCK",
+      "STPPRGM1" 
+#      "STPPRGM2", - commenting out since these are all missing
+#      "STPPRGM3" ,
+#      "STPPRGM4",
+#      "STPPRGM5" ,
+#      "STPPRGM6"
+      #,"STCLUSTER",
+)
+
+vars_outcome = c(
+  "C16BMVDEG",   # Earned a degree from any college (%) (CUNY + OHIO)
+  "X16BTMCRET",  # Total credits earned (CUNY) ("X"-prefix because excluding repeated courses)
+  "SessionsEnrolled" ,   #Sessions enrolled (out of 12) (CUNY)  #NC: this is currently out of 17, not 12
+  "AnyEnrollment" 
+  )
+      
+
+#variable sets to consider from PZ
+#a.	Small set: gender, race, age, 
+#b.	Medium set: small set + has any children(parental status), single parent (marital status),working (currently employed), depends on parents for more than half of expenses, first in family to attend college, and earned a high school diploma
+#c.	Large set: Medium set + #of hours worked per week + age of youngest child + # of children + highest degree planned
+# In addition, we should always include the RA block indicators (college-by-cohort) as covariates in the analysis.
+
+vars_covsmall = c(
+  "BLAGENUM",   # Age
+  "BLFEMALE",  # Gender (Female dummy)
+  "BLRAET1" # Race/ethnicity
+ )
+
+vars_covmed = c(vars_covsmall,
+  "BLCHLD",  # Has children
+  "BLLIV",   # Marital status and living situation
+  "BLWORK",  # Currently employed
+  "BLP50",   # Parents pay more than 50% of educational expenses
+  "BLC1ST",  # First in immediate family to attend college
+  "BLDEGS_HSDP"  #Diplomas and degrees earned
+)
+  
+
+vars_covlarge = c(vars_covmed,
+  "BLWKHRNUM",  # Current average weekly work hours  - converted from categorical to numeric
+  "BLCAGENUM",  # Age of youngest child - converted  from categorical to numeric
+  "BLCNUM",  # Number of children
+  "BLDGPL2"# Highest Degree Planned
+  
+  )
+
+
+vars_covall = c(vars_covlarge,
+  "BLLANG",  # Speak a language other than English at home
+#  "BLFULLTIME" ,  # Planned credits (OHIO only) -  Full time student (convertd from categorical)
+  "BLDEGS_GED",  #Diplomas and degrees earned
+  "BLDEGS_TECH",  #Diplomas and degrees earned
+  #"BLDEGS_AS",  #Diplomas and degrees earned - all missing, along with  BLDEGS_BAOH and BLDEGS_OTHR
+  "BLDEGS_NONE",  #Diplomas and degrees earned
+  "BLDPDT", # Date earned high school diploma
+  #"BLEDUF1", # Father's Level of Education - all missing, along with BLEDUM1 (Mother's level)
+  "BLHSGR"   # Highest grade completed
+ # "BLTRNS_CAR",   # Method of commuting to school
+#  "BLTRNS_PUB",   # Method of commuting to school
+#  "BLTRNS_POOL",   # Method of commuting to school
+#  "BLTRNS_WALK",   # Method of commuting to school
+#  "BLTRNS_DRPFF"   # Method of commuting to school
+ # "BLTRNS_OTHR"  # Method of commuting to school - all missing
+  )
+
+#selecting the variables and covariates we want into a set with limited variables
+#some variables that are NA everywhere are excluded here
+asaplv<-asap[,c(vars_study, vars_outcome, vars_covall)]
+```
+
+#define helper functions
+
+```{r define helper functions}
+#helpful functions 
+#a function to identify lists with only 2 non-missing values (possibly binomial distribution)
+findbinom = function(x){
+  length(unique(na.omit(x))) == 2
+}
+#a function to identify lists with > 2 non-missing values (possibly normal distribution)
+findnorm = function(x){
+  length(unique(na.omit(x))) > 2
+}
+
+makemockdata = function(x, dataset){
+  #get the name of one list (aka one column)
+  var = names(dataset)[parent.frame()$i[]]
+  
+  #select only one list (aka one column or variable) at a time for processing
+  onevaronly = asaplv3[,c(var)]
+  #for binom distributions, recode any 0/100 to 0/1 and create init_fake code
+  if (asapnames[asapnames$names==var, c("distribution")] == "binom"){
+       rDiv = 1 #we're going to divide by this if the max is 100
+       if ( max(onevaronly, na.rm=TRUE)==100) {rDiv = 100}
+       x = x / rDiv
+       cat(paste0(var, "="
+             , "rbinom(n, size=1, prob="
+             , round(mean(onevaronly, na.rm=TRUE)/rDiv, digits=roundDigits)
+             , "),\n"))
+      as.numeric(x)
+    }
+       
+   #for normal distributions, leave the variable as-is and create init_fake code
+   else if (asapnames[asapnames$names==var, c("distribution")] == "norm"){
+       cat(paste0(var, "="
+             , "rnorm(n, mean="
+             , round(mean(onevaronly, na.rm=TRUE), digits=roundDigits)
+             , ", sd = "
+             , round(sd(onevaronly, na.rm=TRUE), digits=roundDigits)
+             , "),\n"))
+       as.numeric(x)
+   }
+  #for variables where we have indicated a sampling distribution should be used, create a numeric factor and create init_fake code to replicate the distribution in the original dataset
+  else if (asapnames[asapnames$names==var, c("type")] == "sample"){
+    cat(paste0(var, "="
+         , "sample("
+         ,list(as.integer(table(onevaronly)))
+         ,", n , replace=TRUE),\n"))
+    as.numeric(factor(x))
+  }
+  #categorical columns:
+      # exactly 2 non-missing factor values: recode to 0/1 and create init_fake with binom distribution
+      # >2 non-missing factor values: recode to 1-N, where N is the number of non-missing factor values and create init_fake with normal distribution
+  else if (asapnames[asapnames$names==var, c("type")] == "character") {
+    #replace "" with NA
+    x[x==""]<-NA
+    factorvar <-factor(x)
+    factorvarasint = as.integer(factorvar)
+    
+    if (nlevels(factorvar)==2){
+      factorvarasint = factorvarasint - 1
+      cat(paste0(var, "="
+         , "rbinom(n, size=1, prob="
+         , round(mean(factorvarasint), digits=roundDigits)
+         , "),\n"))
+    }
+    if (nlevels(factorvar)>2){
+      cat(paste0(var, "="
+         , "round(rnorm(n, mean="
+         , round(mean(factorvarasint), digits=roundDigits)
+         , ", sd = "
+         , round(sd(factorvarasint), digits=roundDigits)
+         , "), digits=0),\n"))
+    }
+    as.numeric(factorvarasint)
+  }
+}
+
+#where init_fake created any normal distributions, fix outlier min's and max's
+fixoutliers = function(x, dataset){
+  x[x==""]<-NA
+  var = names(dataset)[parent.frame()$i[]]
+  onevaronly = asaplv3[,c(var)]
+  if ((asapnames[asapnames$names==var, c("distribution")] == "norm") || 
+      (asapnames[asapnames$names==var, c("type")] == "character" && (nlevels(factor(x))>2))){
+       #fix minimums
+       cat(paste0("asap_init_fake[asap_init_fake[, c('"
+               , var
+               , "')]<"
+               , min(dataset[,c(var)], na.rm=TRUE)
+               ,",c('"
+               , var
+               , "')]= "
+               , min(dataset[,c(var)], na.rm=TRUE)
+               ,"\n"))
+        #fix maxiumums
+        cat(paste0("asap_init_fake[asap_init_fake[, c('"
+               , var
+               , "')]>"
+               , max(dataset[,c(var)], na.rm=TRUE)
+               ,",c('"
+               , var
+               , "')]= "
+               , max(dataset[,c(var)], na.rm=TRUE)
+               ,"\n"))
+     }
+}
+
+#add NAs back into columns we created
+addbackNAs = function(x, dataset){
+  x[x==""]<-NA
+  var = names(dataset)[parent.frame()$i[]]
+  if (sum(is.na(dataset[,c(var)])) > 0){
+    
+   cat(paste0("asap_init_fake[sample(1:n, "
+           , sum(is.na(dataset[,c(var)]))
+          
+           , "), c('"
+           , var
+           , "')] = NA\n"))
+  }
+   
+}
+
+```
+#use helper functions
+```{r use helper functions}
+#select variables
+asaplv2 = asaplv [,c(
+                     vars_study
+                     ,vars_covall
+                     ,vars_outcome
+                     )]
+#using asaplv3 so that we can subset rows for testing as needed
+# asaplv3 = asaplv2[900:1000,]
+asaplv3 = asaplv2[,]
+
+#create asapnames which will spell out what kind of distribution to use for each list
+asapnames = data.frame(
+    names= trimws(names(asaplv3))
+    ,type = sapply(asaplv2, class)
+)
+
+#define variables that will be created using a sampling distribution
+samplevars = c("STXID", "STRA_DATE", "STRA_BLOCK","BLLIV", "BLRAET1", "STSITE", "STCOHORT", "STXCOHORT" , "BLDGPL2", "BLHSGR" )
+
+asapnames[, c("distribution")] =  asapnames$type
+asapnames[sapply(asaplv3, findnorm) ,]$distribution = "norm"
+asapnames[sapply(asaplv3, findbinom),]$distribution = "binom"
+asapnames[asapnames$type=="character",]$distribution = "character"
+asapnames[trimws(asapnames$names) %in% samplevars, c("distribution", "type")]= "sample"
+
+
+asap_labels <-
+  c( STSTUDY = "STUDY: NAME"
+     ,STSITE = "STUDY: SITE"
+     ,STCOHORT = "STUDY: COHORT NUMBER"
+     ,STXCOHORT = "STUDY: TREATMENT COHORT"
+     ,STRA_CODE = "STUDY: TREATMENT CODE"
+     ,STRA_DATE = "STUDY: TREATMENT DATE"
+     ,STRA_BLOCK = "STUDY: RA BLOCK"
+     ,STPPRGM1 = "STUDY: PROBABILITY OF ASSIGNMENT TO PROGRAM GROUP P1"
+  #   ,STPPRGM2 = "STUDY: PROBABILITY OF ASSIGNMENT TO PROGRAM GROUP P2"
+  #   ,STPPRGM3 = "STUDY: PROBABILITY OF ASSIGNMENT TO PROGRAM GROUP P3"
+  #   ,STPPRGM4 = "STUDY: PROBABILITY OF ASSIGNMENT TO PROGRAM GROUP P4"
+  #   ,STPPRGM5 = "STUDY: PROBABILITY OF ASSIGNMENT TO PROGRAM GROUP P5"
+  #   ,STPPRGM6 = "STUDY: PROBABILITY OF ASSIGNMENT TO PROGRAM GROUP P6"
+       # ,BLTRNS_OTHR = "BL: Method of commuting to school = OTHR: Other, Categorical (non-mutually exclusive)"
+     ,BLAGENUM = "BL: age (converted to numeric)"
+     ,BLFEMALE = "BL gender (1=FEMALE)"
+     ,BLRAET1 =  "BL: race/ethnicity (Asian/Pacific Islander, Black, Hispanic , Two or more,Other,White)"
+     ,BLCHLD = "BL: Has children, 0/100"
+     ,BLLIV = "BL: Marital status and living situation (COHABIT, MARNSP, MARS, SINGLE)"
+     ,BLWORK = "BL: Currently employed, 0/100"
+     ,BLP50 = "BL: Parents pay more than 50% of educational expenses, 0/100"
+     ,BLC1ST = "BL: First in immediate family to attend college, 0/100"
+     ,BLDEGS_HSDP = "BL: Diplomas and degrees earned = HSDP: High school diploma  (0/1)"
+     ,BLWKHRNUM  = "BL: current average weekly work hours (converted to numeric)"
+     ,BLCAGENUM = "BL: age of child (converted to numeric)"
+     ,BLCNUM = "BL: Number of children, Continuous"
+     ,BLDGPL2 = "BL: highest degree planned (Associates, Bachelors, Masters, PhD)"
+     ,BLLANG = "BL: Speak a language other than English at home, 0/100"
+  
+  #omitting BLFULLTIME since it's only available for Ohio
+  #   ,BLFULLTIME = "BL: planned credits, (1=full-time, 0= part-time)"
+     ,BLDEGS_GED = "BL: Diplomas and degrees earned = GED: General Education Diploma  (0/1)"
+     ,BLDEGS_TECH = "BL: Diplomas and degrees earned = TECH: Occupational or technical certificate  (0/1)"
+     #,BLDEGS_AS = "BL: Diplomas and degrees earned = AS: Associate degree, Categorical (non-mutually exclusive)"
+     #,BLDEGS_BAOH = "BL: Diplomas and degrees earned = BAOH: Bachelor's degree or higher, Categorical (non-mutually exclusive)"
+     #,BLDEGS_OTHR = "BL: Diplomas and degrees earned = OTHR: Other, Categorical (non-mutually exclusive)"
+     ,BLDEGS_NONE = "BL: Diplomas and degrees earned = NONE: None of the above  (0/1)"
+     ,BLDPDT = "BL: Date earned high school diploma, SAS date"
+     ,BLHSGR = "BL: highest high school grade complete, Categorical"
+  #omitting BLTRNS since it's only available for Ohio
+  #  ,BLTRNS_CAR = "BL: Method of commuting to school = CAR: Driving, Categorical (non-mutually exclusive)"
+  #   ,BLTRNS_PUB = "BL: Method of commuting to school = PUB: Public transportation, Categorical (non-mutually exclusive)"
+  #   ,BLTRNS_POOL = "BL: Method of commuting to school = POOL: Carpool, Categorical (non-mutually exclusive)"
+  #   ,BLTRNS_WALK = "BL: Method of commuting to school = WALK: Bicycle/walk, Categorical (non-mutually exclusive)"
+  #   ,BLTRNS_DRPFF = "BL: Method of commuting to school = DRPFF: Dropped off by family/friends, Categorical (non-mutually exclusive)"
+     ,C16BMVDEG = "NSC/DG: C16B attained any credential at any college"
+     ,X16BTMCRET = "TR: X16B credits earned, total"
+     ,SessionsEnrolled = "Sessions Enrolled over full-followup period (Max 17 for CUNY, 8 for Ohio)"
+     ,AnyEnrollment = "Enrolled for at least one session (based on SessionsEnrolled)"
+  )
+
+#create new data with numeric instead of string categoricals, also creates code for init_fake
+
+asaplv4 =   data.frame(lapply(asaplv3, makemockdata, asaplv3))
+
+#create code to fix outliers -don't need return values, just output
+junk = lapply(asaplv3, fixoutliers, asaplv4)
+
+#create code to add back NA's
+junk = sapply(asaplv3, addbackNAs, asaplv4)
+
+summary(asaplv4)
+
+
+# Assign labels to data frame variables
+asaplv5 = set_variable_labels(asaplv4,         
+                                     .labels = asap_labels)
+
+library(summarytools)
+# Generate Codebook
+print(dfSummary(asaplv5,
+                varnumbers = FALSE,
+                valid.col = FALSE,
+                graph.magnif = 0.76,
+                max.distinct.values = 5),
+      method = 'render')
+```
+The data contain both character and numeric values that we need to convert to numeric in order to run the simulation. Here are some types and proposals for how to process them: 
+
+Character type (up to 2 non-missing levels):
+Proposal: convert to dichotomous 0/1, and add labels
+
+Character type (more than 2 non-missing levels)
+Proposal: convert to 1, 2, 3, etc. and add labels
+
+Double type, representing bins (i.e. BLCAGE)
+Proposal: convert to 1, 2, 3, etc. and add labels
+
+Double type, representing numbers
+Proposal: leave as double
+
+Variables and model used in ASAP Study, from email: 
+
+"Cumulative Total Credits Earned (thought semester 6): C06BTMCRET or X06BTMCRET.
+Earned a degree from any college: C06BMVDEG
+Enrolled in a 4-year college in semester 6: R06MVREGA4
+Treatment indicator: STRA_CODE
+Random assignment block indicator: STRA_BLOCK   I’m pretty sure this should have five values – there were 2 colleges with 2 cohorts, and 1 college with 1 cohort – I’m pretty sure those were the study blocks.
+
+Model: We used a simple GLM estimator with random assignment block indicators and a treatment #indicator (no other covariates)."
+
+```{r ASAP specification}
+#for information about why I chose lm vs glm see https://stackoverflow.com/questions/27083586/proc-glm-sas-using-r
+asapmodel <- lm(X06BTMCRET ~ factor(STRA_BLOCK) + factor(STRA_CODE), data=asap)
+emmeans::emmeans(asapmodel, "STRA_CODE") 
+#cleaning up output with suggestions from https://rserver02.corpmdrc.org:3939/MDRC-Analysis-Guide/linear-regression.html
+
+#alternate method, using RTU function discussed here: #https://rserver02.corpmdrc.org:3939/MDRC-Analysis-Guide/linear-regression.html
+#source("/data/share/xproject/Training/data-programming-user-code/Analysis/Regression/lm_extract.R")
+#asapextract<-lm_extract(asap,
+#            #dependents
+#           c("X06BTMCRET"),  #dependents
+#           c("STRA_CODE"),   #treatment
+#           c("STRA_BLOCK"), #covariates
+#             asfactorcovs = NA_character_, confintalpha = 0.95) 
+#asapextract[1,10]
+
+```
+Make correlation matrix
+```{r correlation matrix, eval=FALSE, include=FALSE}
+asapnum1 = select_if(asaplv5, is.numeric)
+asapnum2 = subset(asapnum1 , select = -c(STSTUDY))
+
+#corrdata <- cor(na.omit(asapnum2), use="pairwise.complete.obs") 
+
+#lapply(asapnum2, sd)
+# Create a correlation matrix plot. Continue from here, figure out why
+#library(corrplot)
+#corrplot(corrdata, method="color",type="upper", tl.cex = 0.5)
+
+#move this up here
+asap_subset<-asaplv5
+
+sm = asap_subset[, vars_covsmall]
+names(sm)
+str(sm, give.head=FALSE, give.attr=FALSE, no.list=TRUE, digits.d=1)
+
+varuse = vars_outcome
+cbind(names( asap_subset[, varuse]), var_label( asap_subset[, varuse]))
+
+str(sm)
+
+
+asap_subset$BLRAET1 = as.factor( asap_subset$BLRAET1 )
+asap_subset$BLLIV = as.factor( asap_subset$BLLIV )
+asap_subset$BLHSGR = as.factor( asap_subset$BLHSGR )
+asap_subset$BLLANG = as.factor( asap_subset$BLLANG )
+asap_subset$BLCNUM = as.factor( asap_subset$BLCNUM )
+asap_subset$BLDGPL2 = as.factor( asap_subset$BLDGPL2 )
+
+```
+Save the file
+
+```{r save file}
+#last save 6-5-24 NC
+asap_subset = asaplv5 
+saveRDS(asap_subset, file = paste0(savdir, savdat, ".rds"), ascii = FALSE, version = NULL,       compress = TRUE, refhook = NULL)
+
+#save(asap_subset, file=paste0(savdir, savdat, ".RData"))
+#write.csv(s2, file=paste0(odir, odat, ".csv"), na="")
+#write.xlsx(s2, file=paste0(odir, odat, ".xlsx"), na="")
+#saveRDS(asap_subset, file = paste(savdir, "asap_subset.rds", sep="/"))
+```
