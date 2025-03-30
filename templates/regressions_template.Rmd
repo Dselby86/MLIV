@@ -1,0 +1,241 @@
+---
+title: "Run stacked regressions and combine old regression results (eventually, run individual regressions here also)"
+subtitle: "MLIV"
+author: "Nick Commins"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    df_print: paged
+    fig_caption: yes
+    fig_height: 8
+    fig_width: 10
+    highlight: pygments
+    theme: spacelab
+    toc: yes
+    toc_depth: 6
+    toc_float: yes
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set( echo = TRUE )
+```
+
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+# Call in program #8 for aggregate function definitions
+source( here::here("simulation_pipeline/08_run_simulation.R" ))
+```
+
+## Reshape simulation output to allow for new stacked regression
+
+```{r message=FALSE, warning=FALSE}
+
+# This vector should contain all the data we want, update dirname below as needed
+ALL_MODELS <- c("ATE", "OLS S", "RF Inf","RF T","RF MOM IPW","RF MOM DR",
+                "CF","CF LC","CDML","LASSO INF",
+                "LASSO T","LASSO MOM IPW","LASSO MOM DR", "LASSO MCM","LASSO MCM EA",
+                "LASSO R", "SL T", "SL S", "XGBOOST S", "XGBOOST R", "BART T")
+
+
+mnd = readRDS( paste0("../results/aggregated_IATEs/mnd/simulation_from_070524/aggregated_IATEs_data.rds"))
+ca = readRDS( paste0("../results/aggregated_IATEs/ca/simulation_from_070324/aggregated_IATEs_data.rds"))
+
+ca_data = readRDS("/data/share/cdi/MLIV/Data/Real/ca_subset.rds")
+
+#load("/data/share/cdi/MLIV/Data/Simulated/Sim_Run_2024-01-25_ca/ca_50_1_CDML.RData")
+#df2 = ca_50_1_CDML
+#agg_perf_by_queen  = aggregated_performance_by_queen( df )
+#agg_perf_by_queen2  = aggregated_performance_by_queen( df2 )
+
+alldata = c("ca")
+
+
+#################################################################################################################
+################# UPDATE WITH NEW FOLDER DATES AND/OR NEW OUTCOMES TO ADD TO REGRESSION #########################
+#################################################################################################################
+
+for (dataname in alldata){
+#for (dataname in c("asap_50_2_RF_LASSO_CDMLL")){
+  #projname = strsplit(dataname, "[_]")[[1]][1]
+  if (dataname == "mnd"){
+    dirname = "simulation_from_070524"
+  }
+  if (dataname == "ca"){
+    dirname = "simulation_from_070324"
+  }
+  
+  
+  # if (dataname == "asap_50_2_RF_LASSO_CDML"){
+  #   dirname = "Sim_Run_2023-11-27_asap"
+  # }
+  # if (projname == "ca"){
+  #   dirname =    "Sim_Run_2024-03-27_ca"
+  # }
+  readRDS( paste0("../results/aggregated_IATEs/",dataname, "/", dirname, "/", "aggregated_IATEs_data.rds"))
+}
+
+#as we add more to the regression, update this section  
+ca_cont = rescale_output(ca, realds_name="ca_data", treatment_name = "TREATMNT" , outcome_name = "Y18JBERNA_06")
+#mnd_bina = rescale_output(ca, realds_name="ca_data", treatment_name = "Z" , outcome_name = "Y_binary")
+
+
+sim_results_allvars = rbind(ca_cont)
+
+## END OF SECTION TO UPDATE ## 
+##############################
+
+```
+
+## Check values of sd_0
+
+```{r}
+distinct(sim_results_allvars[,c("outcome", "sd_0")])
+
+#histogram of two asap outcomes, control only
+
+# ggplot(asap_subset_imputed[asap_subset_imputed$STRA_CODE==0,], aes(x=C16BMVDEG)) + geom_histogram()
+# ggplot(asap_subset_imputed[asap_subset_imputed$STRA_CODE==0,], aes(x=X16BTMCRET)) + geom_histogram()
+# ggplot(ca_subset_imputed[ca_subset_imputed$TREATMNT==0,], aes(x=Y18JBERNA_06)) + geom_histogram()
+
+sim_results_allvars %>%
+  group_by (outcome) %>%
+  mutate (n= n())
+
+sim_results_allvars$simID = paste0(sim_results_allvars$outcome, sim_results_allvars$n, sim_results_allvars$tx_het)
+
+sim_results_allvars$MODEL_IS_MOM = as.numeric(grepl("MOM", sim_results_allvars$model) )
+sim_results_allvars$MODEL_IS_CF =  as.numeric( grepl("CF", sim_results_allvars$model)  )
+sim_results_allvars$MODEL_IS_CMR = as.numeric(grepl("CMR", sim_results_allvars$model) )
+sim_results_allvars$MODEL_IS_MCM = as.numeric(grepl("MCM", sim_results_allvars$model) )
+sim_results_allvars$MODEL_IS_IPW = as.numeric(grepl("IPW", sim_results_allvars$model) )
+sim_results_allvars$MODEL_IS_LASSO = as.numeric(grepl("Lasso", sim_results_allvars$model)) 
+sim_results_allvars$MODEL_IS_RF = as.numeric(grepl("RF", sim_results_allvars$model) )
+sim_results_allvars$MODEL_IS_INF = as.numeric(grepl("Inf", sim_results_allvars$model) )
+sim_results_allvars$MODEL_IS_CDML = as.numeric(grepl("CDML", sim_results_allvars$model) )
+sim_results_allvars$MODEL_IS_ATE = as.numeric(grepl("ATE", sim_results_allvars$model)  )
+sim_results_allvars$MODEL_IS_OLS = as.numeric(grepl("OLS", sim_results_allvars$model) )
+sim_results_allvars$MODEL_IS_XGBOOST = as.numeric(grepl("XGBOOST", sim_results_allvars$model))
+sim_results_allvars$MODEL_IS_BART = as.numeric(grepl("BART", sim_results_allvars$model) )
+
+sim_results_allvars$QUEEN_IS_MOM = as.numeric(grepl("MOM", sim_results_allvars$queen) )
+sim_results_allvars$QUEEN_IS_CF = as.numeric(grepl("CF", sim_results_allvars$queen)  )
+sim_results_allvars$QUEEN_IS_CMR = as.numeric(grepl("CMR", sim_results_allvars$queen) )
+sim_results_allvars$QUEEN_IS_MCM = as.numeric(grepl("MCM", sim_results_allvars$queen) )
+sim_results_allvars$QUEEN_IS_IPW = as.numeric(grepl("IPW", sim_results_allvars$queen) )
+sim_results_allvars$QUEEN_IS_LASSO = as.numeric(grepl("Lasso", sim_results_allvars$queen)) 
+sim_results_allvars$QUEEN_IS_RF = as.numeric(grepl("RF", sim_results_allvars$queen) )
+sim_results_allvars$QUEEN_IS_INF = as.numeric(grepl("Inf", sim_results_allvars$queen) )
+sim_results_allvars$QUEEN_IS_CDML =as.numeric( grepl("CDML", sim_results_allvars$queen)) 
+sim_results_allvars$QUEEN_IS_ATE = as.numeric(grepl("ATE", sim_results_allvars$queen) ) 
+sim_results_allvars$QUEEN_IS_OLS = as.numeric(grepl("OLS", sim_results_allvars$queen) )
+sim_results_allvars$QUEEN_IS_XGBOOST = as.numeric(grepl("XGBOOST", sim_results_allvars$queen) )
+sim_results_allvars$QUEEN_IS_BART = as.numeric(grepl("BART", sim_results_allvars$queen) )
+
+
+modelcovars  = c( "MODEL_IS_MOM", "MODEL_IS_CF", "MODEL_IS_MCM","MODEL_IS_IPW", "MODEL_IS_LASSO","MODEL_IS_RF","MODEL_IS_INF","MODEL_IS_CDML","MODEL_IS_ATE"
+                  #,"MODEL_IS_OLS"
+                  , "MODEL_IS_XGBOOST", "MODEL_IS_BART")
+queencovars  = c("QUEEN_IS_MOM", "QUEEN_IS_CF", "QUEEN_IS_MCM", "QUEEN_IS_IPW", "QUEEN_IS_LASSO","QUEEN_IS_RF","QUEEN_IS_INF","QUEEN_IS_CDML","QUEEN_IS_ATE"
+                 #,"QUEEN_IS_OLS"
+                 , "QUEEN_IS_XGBOOST", "QUEEN_IS_BART")
+
+
+
+
+
+
+```
+
+## Regressions +/- model random effects {.tabset}
+
+### Bias
+
+```{r echo=FALSE}
+
+makeregressiontable <- function (df , response_var, includemodel= FALSE){
+  #capitalize metric name for title
+  
+    if (response_var=="se"){response_var_title="SE"}
+    if (response_var=="rmse"){response_var_title="RMSE"}
+    if (response_var=="bias"){response_var_title="Bias"}
+  
+    # Tidy up regression results
+    ##omitting simID until we have more than one variable this has been run for
+    #summary(lmer(reformulate( c(modelcovars, queencovars, "(1|model)", "(1|queen)", "(1|simID)"), response="bias"),data=sim_results_allvars))
+ if (includemodel ==TRUE){
+     tidy_lmer <- tidy(lmer(reformulate( c(modelcovars, queencovars, "(1|model)", "(1|queen)"), response=response_var),data=df))
+    response_var_title = paste0(response_var_title, " including modelcovars")
+ } 
+ if (includemodel ==FALSE){
+  
+  #Run without model covars
+    tidy_lmer <- tidy(lmer(reformulate( c(queencovars, "(1|model)", "(1|queen)"), response=response_var),data=df))
+    response_var_title = paste0(response_var_title,  " excluding modelcovars")
+ }
+    # Print a formatted table
+   kable(tidy_lmer, format = "html", align = "c", caption = paste0("Regression of ", response_var_title)) %>%
+    kable_styling(full_width = FALSE)
+ 
+}
+makeregressiontable (df=sim_results_allvars,response_var="bias", includemodel = TRUE)
+makeregressiontable (df=sim_results_allvars,response_var="bias", includemodel = FALSE)
+#bias
+```
+
+### SE
+
+```{r}
+
+makeregressiontable (df=sim_results_allvars,response_var="se", includemodel = TRUE)
+makeregressiontable (df=sim_results_allvars,response_var="se", includemodel = FALSE)
+#end of SE
+```
+
+### RMSE
+
+```{r}
+#rmse
+
+makeregressiontable (df=sim_results_allvars,response_var="rmse", includemodel = TRUE)
+makeregressiontable (df=sim_results_allvars,response_var="rmse", includemodel = FALSE)
+
+```
+
+## Regressions omitting CDML +/- model random effects {.tabset}
+
+### Bias
+
+```{r}
+sim_results_noCDML = sim_results_allvars[sim_results_allvars$model != "CDML" & sim_results_allvars$queen!="CDML",]
+#bias
+
+
+makeregressiontable (df=sim_results_noCDML,response_var="bias", includemodel = TRUE)
+makeregressiontable (df=sim_results_noCDML,response_var="bias", includemodel = FALSE)
+
+#end of bias
+```
+
+### SE
+
+```{r}
+
+
+makeregressiontable (df=sim_results_noCDML,response_var="se", includemodel = TRUE)
+makeregressiontable (df=sim_results_noCDML,response_var="se", includemodel = FALSE)
+
+#end of SE
+```
+
+### RMSE
+
+```{r}
+#rmse
+
+makeregressiontable (df=sim_results_noCDML,response_var="rmse", includemodel = TRUE)
+makeregressiontable (df=sim_results_noCDML,response_var="rmse", includemodel = FALSE)
+
+```

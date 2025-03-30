@@ -1,0 +1,654 @@
+---
+title: "Template for outputting MLIV results"
+author: "Polina Polskaia"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    df_print: paged
+    fig_caption: yes
+    fig_height: 8
+    fig_width: 10
+    highlight: pygments
+    theme: spacelab
+    toc: yes
+    toc_depth: 6
+    toc_float: yes
+  pdf_document:
+    toc: yes
+    toc_depth: '6'
+editor_options:
+  markdown:
+    wrap: 72
+---
+
+
+```{r eval=FALSE, include=FALSE}
+---
+title: "Template for outputting MLIV results"
+subtitle: "MLIV"
+author: "Polina Polskaia"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    df_print: paged
+    fig_caption: yes
+    fig_height: 8
+    fig_width: 10
+    highlight: pygments
+    theme: spacelab
+    toc: yes
+    toc_depth: 6
+    toc_float: yes
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```
+
+
+> PLEASE DO NOT MODIFY THIS TEMPLATE, COPY IT TO THE OUTPUTS FOLDER, RENAME, AND MODIFY IT THERE.
+
+
+# Set up 
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set( echo = TRUE )
+```
+
+
+```{r include=FALSE}
+#' aggregate_proc_time: Mean of processing time across obs by model and queen
+#'
+#' Needs to be stacked performance stats with a "queen" column
+#' indicating where the impacts came from.
+#'
+#' @param performance_stats Matrix of bias, SE, and RMSE 
+#'
+#' 
+
+aggregate_time_by_queen = function( performance_stats ) {
+  
+  stopifnot( "queen" %in% colnames(performance_stats) )
+  
+  agg_stat = performance_stats %>% 
+    filter( metric == "runtime") %>%
+    pivot_longer( cols = any_of( ALL_MODELS ),
+                  names_to = "model",
+                  values_to = "value" ) %>%
+    
+    group_by( model, queen ) %>%
+    summarise( runtime =mean( value ),
+               .groups = "drop")
+  
+  return( agg_stat )
+}
+```
+
+```{r include=FALSE}
+#' aggregated_performance_by_queen: Aggregate performance characteristics
+#' (Bias, SE, RMSE) across all observations by model by queen.
+#'
+#' Needs to be stacked performance stats with a "queen" column
+#' indicating where the impacts came from.
+#'
+#' @param performance_stats Matrix of bias, SE, and RMSE 
+#'
+#' NOTE/WARNING:
+#'   Bias is squared and then averaged, which will give a semi-funky
+#'   mean of of absolute bias.
+#' 
+
+aggregated_performance_by_queen <- function( performance_stats ) {
+  
+  stopifnot( "queen" %in% colnames(performance_stats) )
+  
+  agg_stat = performance_stats %>% 
+    pivot_longer( cols = any_of( ALL_MODELS ),
+                  names_to = "model",
+                  values_to = "value" ) %>%
+    filter( !( metric %in% c( "runtime", "percent_cut" ) ) ) %>%
+    group_by( metric, model, queen ) %>%
+    summarise( Ev = sqrt( mean( value^2 ) ),
+               Q1 = quantile( value, 0.25 ),
+               Q3 = quantile( value, 0.75 ),
+               .groups = "drop" ) 
+  
+  return( agg_stat )
+}
+```
+
+```{r include=FALSE}
+#' aggregate_outliers_by_queen: Mean percent of outliers cut by model and queen
+#'
+#' Needs to be stacked performance stats with a "queen" column
+#' indicating where the impacts came from.
+#'
+#' @param performance_stats Matrix of bias, SE, and RMSE 
+#'
+#' 
+
+aggregate_outliers_by_queen = function( performance_stats ) {
+  
+  stopifnot( "queen" %in% colnames(performance_stats) )
+  
+  agg_stat = performance_stats %>% 
+    filter( metric == "percent_cut") %>%
+    pivot_longer( cols = any_of( ALL_MODELS ),
+                  names_to = "model",
+                  values_to = "value" ) %>%
+    
+    group_by( model, queen ) %>%
+    summarise( percent_cut = ( mean( value ) * 100 ),
+               .groups = "drop")
+  
+  return( agg_stat )
+}
+```
+
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+
+aggregate_metrics = function( performance_stats, wide = FALSE ) {
+  
+  agg_stat = performance_stats %>% 
+    pivot_longer( cols = any_of( ALL_MODELS ),
+                  names_to = "model",
+                  values_to = "value" ) %>%
+    filter(queen != "ATE") %>%
+    group_by( metric, model ) %>%
+    summarise( Ev = sqrt( mean( value^2 ) ), 
+               Q1 = quantile( value, 0.25 ),
+               Q3 = quantile( value, 0.75 ),
+               .groups = "drop" ) 
+  
+  if ( wide ) {
+    agg_stat = agg_stat %>%
+      pivot_wider( names_from = metric,
+                   values_from = c( Ev, Q1, Q3 ),
+                   names_glue = "{metric}_{.value}"
+      ) %>%
+      relocate( model, starts_with( "bias" ), 
+                starts_with( "se" ) , 
+                starts_with( "runtime" ) ) # TODO:: Remove
+  }
+  
+  return( agg_stat )
+}
+
+
+
+
+
+#' aggregate_metrics_by_queen: Aggregate performance characteristics
+#' across all units by model by queen.
+#'
+#' Needs to be stacked performance stats with a "queen" column
+#' indicating where the impacts came from.
+#'
+#' @param performance_stats Matrix of bias, SE, and RMSE NOTE/WARNING:
+#'   Bias is squared and then averaged, which will give a semi-funky
+#'   mean of of absolute bias.
+#' 
+
+aggregate_metrics_by_queen <- function( performance_stats ) {
+  
+  stopifnot( "queen" %in% colnames(performance_stats) )
+  
+  agg_stat = performance_stats %>% 
+    pivot_longer( cols = any_of( ALL_MODELS ),
+                  names_to = "model",
+                  values_to = "value" ) %>%
+    group_by( metric, model, queen ) %>%
+    summarise( Ev = sqrt( mean( value^2 ) ),
+               Q1 = quantile( value, 0.25 ),
+               Q3 = quantile( value, 0.75 ),
+               .groups = "drop" ) 
+  
+  return( agg_stat )
+}
+
+  
+```
+
+
+```{r include=FALSE}
+ source("/data/share/cdi/MLIV/Local repos/ppolskaia/MLIV/simulation_pipeline/08_run_simulation.R", echo=TRUE)
+```
+
+>Load the raw output of your simulation here:
+
+```{r message=FALSE, warning=FALSE}
+# Load files from simulations we already ran
+aggregated_IATEs_data <- readRDS("/data/share/cdi/MLIV/Local repos/ppolskaia/MLIV/results/aggregated_IATEs/ca/simulation_from_070324/aggregated_IATEs_data.rds")
+# Set this to the name of the simulation output data you intend to use
+df = aggregated_IATEs_data
+```
+
+
+The following graphs and tables are based on a simulation of Career Academies data, with small set of covariates, with continuous outcome (AVG MONTHLY EARNINGS IN 2006 DOLLARS), with sigma 0.2, with train set of 2000 and test set of 10000, with proportion treated set to proportion in real data. All models, all queens, 100 iters. Parallel.
+
+```{r}
+ALL_MODELS <-   c("ATE", "OLS S", "RF INF","RF T","RF MOM IPW","RF MOM DR",
+                "CF","CF LC","CDML","LASSO INF",
+                "LASSO T","LASSO MOM IPW","LASSO MOM DR", "LASSO MCM","LASSO MCM EA",
+                "LASSO R", "SL T", "SL S", "XGBOOST S", "XGBOOST R", "BART T", "BART S")
+
+```
+
+```{r include=FALSE}
+# Aggregate performance (Bias, SE, RMSE) by queen
+agg_perf_by_queen  = aggregated_performance_by_queen( df )
+```
+
+
+```{r include=FALSE}
+# Reshape agg_perf_by_queen so metrics are the columns
+wide_Ev_agg_perf_by_queen = pivot_wider(
+  data = agg_perf_by_queen,
+  id_cols = c("model", "queen" ),
+  names_from = metric,
+  values_from = Ev,
+  names_prefix = ""
+)
+```
+
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+# Order by model by queen
+wide_Ev_agg_perf_by_queen <- wide_Ev_agg_perf_by_queen  %>% 
+  arrange(factor(model, levels = ALL_MODELS), factor(queen, levels = ALL_MODELS))
+```
+
+
+```{r include=FALSE}
+# Mean of all queens that are already aggregated excluding ATE
+agg_agg_mean = wide_Ev_agg_perf_by_queen %>%
+  filter( queen != "ATE" ) %>% 
+  group_by( model ) %>%
+  summarise( bias = mean( bias ),
+             SE = mean( se ),
+             RMSE = mean( rmse ),
+             .groups = "drop" )
+```
+
+
+```{r include=FALSE}
+# Add type column
+agg_agg_mean = agg_agg_mean %>%
+  mutate( type = case_when(
+    model == "ATE" ~ "ATE",
+    model == "OLS S" ~ "OLS S",
+    model %in% c( "RF INF", "LASSO INF" ) ~ "INF",
+    model %in% c( "RF T", "RF MOM IPW", "RF MOM DR", "CF", "CF LC" ) ~ "RF",
+    model %in% c( "LASSO T", "LASSO MOM IPW", "LASSO MOM DR", "LASSO MCM", "LASSO MCM EA", "LASSO R" ) ~ "LASSO",
+    model == "CDML" ~ "CDML",
+    model %in% c( "BART T", "BART S" ) ~ "BART",
+    model %in% c( "XGBOOST S", "XGBOOST R" ) ~ "XGBOOST",
+    model %in% c( "SL T", "SL S" ) ~ "SL",
+
+    TRUE ~ "Unknown"
+  ) )
+```
+
+
+```{r include=FALSE}
+# Add type column
+wide_Ev_agg_perf_by_queen = wide_Ev_agg_perf_by_queen %>%
+  mutate( type = case_when(
+    model == "ATE" ~ "ATE",
+    model == "OLS S" ~ "OLS S",
+    model %in% c( "RF INF", "LASSO INF" ) ~ "INF",
+    model %in% c( "RF T", "RF MOM IPW", "RF MOM DR", "CF", "CF LC" ) ~ "RF",
+    model %in% c( "LASSO T", "LASSO MOM IPW", "LASSO MOM DR", "LASSO MCM", "LASSO MCM EA", "LASSO R" ) ~ "LASSO",
+    model == "CDML" ~ "CDML",
+    model %in% c( "BART T", "BART S" ) ~ "BART",
+    model %in% c( "XGBOOST S", "XGBOOST R" ) ~ "XGBOOST",
+    model %in% c( "SL T", "SL S" ) ~ "SL",
+    TRUE ~ "Unknown"
+  ) )
+```
+
+
+```{r include=FALSE}
+# Calculate 75th quantile (Q3) instead of mean
+agg_agg_q3 <- wide_Ev_agg_perf_by_queen %>%
+  filter( queen != "ATE" ) %>% 
+  group_by( model ) %>%
+  summarise( Q3_bias = quantile( bias, probs = 0.75 ),
+             Q3_SE = quantile( se, probs = 0.75 ),
+             Q3_RMSE = quantile( rmse, probs = 0.75 ),
+             .groups = "drop" )
+```
+
+
+```{r include=FALSE}
+# Calculate 25th quantile (Q1) instead of mean
+agg_agg_q1 <- wide_Ev_agg_perf_by_queen %>%
+  filter( queen != "ATE" ) %>% 
+  group_by( model ) %>%
+  summarise( Q1_bias = quantile(bias, probs = 0.25),
+             Q1_SE = quantile(se, probs = 0.25),
+             Q1_RMSE = quantile(rmse, probs = 0.25),
+             .groups = "drop")
+```
+
+
+```{r include=FALSE}
+# Aggregate by mean percentage of outliers cut by queen and model
+percent_cut = aggregate_outliers_by_queen( df )
+```
+
+
+```{r include=FALSE}
+# Calculate mean of mean of mean percent of outliers cut
+agg_percent_cut <- percent_cut %>%
+  filter( queen != "ATE" ) %>% 
+  group_by( model ) %>%
+  summarise( percent_cut = mean(percent_cut ),
+             .groups = "drop")
+```
+
+
+```{r include=FALSE}
+# Aggregate by mean run time by queen and model
+runtime = aggregate_time_by_queen( df )
+```
+
+
+```{r include=FALSE}
+# Calculate mean of mean of mean run time
+agg_runtime <- runtime %>%
+  filter( queen != "ATE" ) %>% 
+  group_by( model ) %>%
+  summarise( runtime = mean(runtime ),
+             .groups = "drop")
+```
+
+# Who won?
+
+## How we aggregate the performance measures (step-by-step)
+
+### Bias, SE, RMSE
+
+* Under the hood, meaning we never see or output this data due to the luck of memory, we calculate predicted tau for each model (17 if all) for 10,000 (obs in test set) for all queens (15 when all models included) for all iterations (50): 17 x 10,000 x 15 x 50 = **127,500,000** obs. We also have 10,000 real taus in the test set (actually they are predicted too, but we treat them as if they are real - that is the whole idea of simulation).
+  1. We aggregate predicted tau across simulation using mean (by model, by queen, by obs): 17 × 15 × 10,000 = 2,550,000 obs
+  2. By model, by queen, by obs we subtract real tau from predicted tau to get 2,550,000 obs for **bias**
+  3. Next we calculate squared errors by model, by queen, by obs using this formula: `(predicted tau - real tau)^2`. This results in 17 x 10,000 x 15 x 50 = **127,500,000** obs for squared error.
+  4. To calculate RMSE we take the mean squared error across simulations (still grouping by obs, model, and queen) and take the square root (still grouping by obs, model, and queen): `rmse = sqrt( apply( errs2, 2:3, mean ) )`. So we end up with 17 × 15 × 10,000 = 2,550,000 obs for **RMSE**. *Note:* `2:3` mean that we take the average across simulation runs, as our data is a 3D matrix of simulation runs by obs by model. So we are averaging across the dimension number one. There is the forth dimension under the hood - queen - but we are using a loop to handle that. So for each queen we have 3D matrix of 50 x 10,000 x 17 instead of 4D matrix.
+  5. To calculate standard error by obs, by model, by queen we take a standard deviation across simulation runs, resulting in 17 × 15 × 10,000 = 2,550,000 obs for **SE**.
+* So at this point we have 3 x 17 x 10,000 x 15 = 7,650,000 obs. 3 is there because we have 3 performance metrics: bias, RMSE, SE. This 7,650,000 obs we save and refer to as raw output of our simulation. Now, it's time to aggregate it further.
+* We group data by MODEL by QUEEN, and aggregate using `sqrt( mean( value^2 ) )` where `value` is bias, SE, or RMSE, across 10,000 obs, resulting in 3 x 17 x 15 = 765 obs. *Note:* Bias is squared and then averaged, which will give a semi-funky mean of of absolute bias.
+* We filter out data when ATE is a queen - down to 714 obs.
+* Next, we group that aggregated data by MODEL again, and we add another level of aggregation: we take the MEAN of that aggregated data - resulting in a data table with 17 obs and columns for 3 metrics (714/3/14 = 17). This is what you see in Table 1 and contour graph.
+So it is a mean across queens of the data aggregated by model and queen using `sqrt( mean( value^2 ) )`.
+
+### Bias75, SE75, RMSE75
+- So imagine all of the steps above except the last one are completed. So we at at 714 obs now of the data is aggregated by model and queen using `sqrt( mean( value^2 ) )`. Now, instead of taking the mean by model across queens, we take the third quintile. That is it.
+
+### IQR_RMSE
+- Imagine in the step above we not only took the third quintile but also the first one for RMSE. We do `3rd - 1st` to get IQR.
+
+### Prop_Extreme
+- This is a proportion of extreme outliers cut and replaced with floor and ceiling values (on a 0-100% scale)
+- We say no treatment impact for *any* method could be larger than one effect size unit. This is how we calculate it: 
+
+```{r eval=FALSE}
+sd_Y0_real = sd( Y0 )
+ATE_real = mean( Yobs[Z==1] ) - mean( Yobs[Z==0] )
+
+predictions = model( x_tr, y_tr, d_tr, x_val )
+p_broke = ifelse(abs(predictions - ATE_real) > sd_Y0_real, 1, 0)
+    
+predictions[ (predictions-ATE_real) > sd_Y0_real ] = ATE_real + sd_Y0_real
+predictions[ (predictions-ATE_real) < -sd_Y0_real ] = ATE_real - sd_Y0_real
+```
+
+- At this point, under the hood, meaning we never see or output this data due to the luck of memory, we assign flag of 0 or 1 for each model (17 if all) for 10,000 (obs in test set) for all queens (15 when all models included) for all iterations (50): 17 x 10,000 x 15 x 50 = 127,500,000 obs to `p_broke`.
+- We aggregate `p_broke` flag across simulation using mean (by model, by queen, by obs): 17 × 15 × 10,000 = 2,550,000 obs. So now we now the proportion of flagged predictions across simulations by model, by queen, by obs.
+- We group data by MODEL by QUEEN, and aggregate using `mean( value ) * 100` where value is flagged predictions across simulations, across 10,000 obs, resulting in 17 x 15 = 255 obs.
+- We filter out data when ATE is a queen - down to 238 obs.
+- Next, we group that aggregated data by MODEL again, and we add another level of aggregation: we take the MEAN of that aggregated data - resulting in a data table with 17 obs (238/14 = 17). This is what you see in Table 1.
+So it is a mean( mean by 100 ( mean )). *Note:* Almost always the proportion ends up being less than 1%.
+
+### Comp_Time
+
+- Under the hood, meaning we never see or output this data due to the luck of memory, we assign the number seconds it took to run a model for each model (17 if all) for all queens (15 when all models included) for all iterations (50). Although we calculate it on the model level, not on the obs level, we still repeat this number 10,000 times for each observation, just because it is easier in terms of coding: 17 x 10,000 x 15 x 50 = 127,500,000 obs to `runtime`.
+- We aggregate `runtime` across simulation using mean (by model, by queen, by obs): 17 × 15 × 10,000 = 2,550,000 obs. So now we now the mean time it took to run across the simulation runs.
+- We group data by MODEL by QUEEN, and aggregate using `mean()` across 10,000 obs, resulting in 17 x 15 = 255 obs. It actually does not matter what we use here as all 10,000 obs are the same, we could have taken `first()`, or `max()`, or `median()`, the number would stay the same. So now we now the number of seconds it took to run one model on average by model by queen. *Note:* If you want to calculate how much it takes to run the who thing you do: sum(255 obs of runtime) ~ 30,750 sec, then 30,750 sec / 60 = 512.5 min then  512.5 min / 60 = 8.5 hours. But we do not nees this number, we need to know how muvh time on average it takes to run one model across queens.
+- We filter out data when ATE is a queen - down to 238 obs.
+- We group that 255 obs by MODEL again, and we add another level of aggregation: we take the MEAN of that aggregated data - resulting in a data table with 17 obs (238/14 = 17). This is what you see in Table 1. *Reminder:* The number in the table is in **seconds**.
+
+
+## Table 1
+
+```{r include=FALSE}
+# Merge table 1
+merged_table_1 <- merge(agg_agg_mean, agg_agg_q1 , by = "model")
+merged_table_1 <- merge(merged_table_1, agg_agg_q3 , by = "model")
+```
+
+```{r include=FALSE}
+# Merge table 1
+merged_table_1 <- merge(merged_table_1, agg_percent_cut , by = "model")
+```
+
+```{r include=FALSE}
+# Merge table 1
+merged_table_1 <- merge(merged_table_1, agg_runtime , by = "model")
+```
+
+```{r include=FALSE}
+# Add IQR
+merged_table_1$IQR_RMSE <- merged_table_1$Q3_RMSE - merged_table_1$Q1_RMSE
+```
+
+```{r include=FALSE}
+# Remove columns
+merged_table_1 <- merged_table_1[, !(names(merged_table_1) %in% c("type", "Q1_RMSE", "Q1_bias", "Q1_SE"))]
+```
+
+```{r include=FALSE}
+# Rename columns
+colnames(merged_table_1)[colnames(merged_table_1) == "percent_cut"] <- "Prop_Extreme"
+```
+
+```{r include=FALSE}
+# Rename columns
+colnames(merged_table_1)[colnames(merged_table_1) == "bias"] <- "Bias"
+```
+
+```{r include=FALSE}
+# Rename columns
+colnames(merged_table_1)[colnames(merged_table_1) == "Q3_bias"] <- "Bias75"
+```
+
+```{r include=FALSE}
+# Rename columns
+colnames(merged_table_1)[colnames(merged_table_1) == "Q3_SE"] <- "SE75"
+```
+
+```{r include=FALSE}
+# Rename columns
+colnames(merged_table_1)[colnames(merged_table_1) == "Q3_RMSE"] <- "RMSE75"
+```
+
+```{r include=FALSE}
+# Rename columns
+colnames(merged_table_1)[colnames(merged_table_1) == "runtime"] <- "Comp_Time"
+```
+
+```{r include=FALSE}
+# Rename columns
+colnames(merged_table_1)[colnames(merged_table_1) == "model"] <- "Model"
+```
+
+```{r include=FALSE}
+# Reorder columns
+merged_table_1 <- merged_table_1 %>%
+  select(Model, Prop_Extreme, Bias, SE, RMSE, Bias75, SE75, RMSE75, IQR_RMSE, Comp_Time)
+```
+
+```{r include=FALSE}
+# Sort
+merged_table_1 <- merged_table_1[order(merged_table_1$RMSE), ]
+```
+
+```{r include=FALSE}
+# Get the indices of numeric columns except the "Model" column
+numeric_cols <- sapply(merged_table_1, is.numeric) & names(merged_table_1) != "Model"
+
+# Round the numeric columns except the "Model" column to two decimal places
+merged_table_1[, numeric_cols] <- round(merged_table_1[, numeric_cols], 2)
+```
+
+Table 1 shows the overall performance characteristics of each model against chosen scenario. Two “Infeasible” models are also included, a Lasso and a Random Forest that are given the true CATEs for the training data. These serve as a benchmark for ideal performance, setting aside the estimation error due to the treatment/control difference and focusing on the ability of the model to fit the queen’s pattern of CATEs and also the representatives of the training sample of the larger population. 
+
+DISREGARD COMP TIME IT IS PROBBLY WRONG!!!!!!!!!!!!!!!!!!!!
+
+```{r echo=FALSE}
+library(knitr)
+
+# Generate a formatted table using kable and kableExtra
+kable(merged_table_1, row.names = FALSE, caption = "Rows sorted by lowest RMSE to highest.") 
+```
+
+Table 1: `Prop_extreme` is the proportion of the test set that was thresholded due to extreme predictions. Scale for `Prop_extreme` is 0-100%, so all values in the table are LESS THAN 1%. `Bias`, `SE`, `RMSE` are averaged across all Queens.  `Bias75`, `SE75`, `RMSE75` are the 75th percentile of the bias, se and RMSE across Queens, indicating how bad “poor performance” tends to be. IQR is the inner quantile range of the RMSE values across all queens. `Comp_Time` is the average computational time for fitting ONE model in seconds. Rows sorted by lowest RMSE to highest.
+
+## Figure 2
+
+**Mean of aggregated bias and SE across queens for each estimator**
+
+*ATE queen excluded*
+
+*Unadjusted scale + RMSE contour added*:
+
+```{r include=FALSE}
+# Contours for RMSE
+euclidean_distance = expand.grid( x = seq( 0, 1.1*max( agg_agg_mean$bias ), length.out=50 ),
+                                  y = seq( 0, 1.1*max( agg_agg_mean$SE ), length.out=50 ) )
+
+euclidean_distance$z = with(euclidean_distance, sqrt( x^2 + y^2 ) )
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+ggplot( agg_agg_mean, aes( bias, SE ) ) +
+  geom_point( aes( color = type ) ) +
+  geom_label_repel( aes( label = model, col=type ), 
+                    box.padding = 0.5, 
+                    point.padding = 0.1,
+                    max.overlaps = Inf ) +
+ geom_contour( data = euclidean_distance, aes( x = x, y = y, z = z ), breaks = c( 50, 100, 150, 200 ) ) +
+  theme_minimal() +
+  # scale_x_continuous( limits = c( 0, 160 ), breaks = seq( 0, 150, by = 25 ) ) +
+  # scale_y_continuous( limits = c( 0, 200 ), breaks = seq( 0, 200, by = 50 ) ) +
+  labs(
+    title = "Mean of aggregated bias and SE across queens\nfor each estimator with RMSE contouring",
+    subtitle = "Note: ATE queen is not included",
+    col = "Model type"
+  )
+```
+# ```{r}
+# p <- ggplot( agg_agg_mean, aes( bias, SE ) ) +
+#   geom_point( aes( color = type ) ) +
+#   geom_label_repel( aes( label = model, col=type ), 
+#                     box.padding = 0.5, 
+#                     point.padding = 0.1,
+#                     max.overlaps = Inf ) +
+#  geom_contour( data = euclidean_distance, aes( x = x, y = y, z = z ), breaks = c( 50, 100, 150, 200 ) ) +
+#   theme_minimal() +
+#   # scale_x_continuous( limits = c( 0, 160 ), breaks = seq( 0, 150, by = 25 ) ) +
+#   # scale_y_continuous( limits = c( 0, 200 ), breaks = seq( 0, 200, by = 50 ) ) +
+#   labs(
+#     title = "Mean of aggregated bias and SE across queens\nfor each estimator with RMSE contouring",
+#     subtitle = "Note: ATE queen is not included",
+#     col = "Model type"
+#   )
+# ```
+# ```{r}
+# 
+# # Change to your folder
+# ggsave("/data/share/cdi/MLIV/Local repos/ppolskaia/MLIV/output/dotplot.png", p, width = 8, height = 6, units = "in", bg = 'white')
+# 
+# ```
+
+
+
+
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+# Contours for RMSE
+euclidean_distance = expand.grid( x = seq( 0, 1.1*max( wide_Ev_agg_perf_by_queen$bias ), length.out=50 ),
+                                  y = seq( 0, 1.1*max( wide_Ev_agg_perf_by_queen$se ), length.out=50 ) )
+
+euclidean_distance$z = with(euclidean_distance, sqrt( x^2 + y^2 ) )
+```
+
+```{r}
+library( ggpubr )
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+# Iterate over unique queens
+queens <- unique(wide_Ev_agg_perf_by_queen$queen)
+
+# Create a list to store plots
+plots <- list()
+
+# Iterate over queens
+for (q in queens) {
+  # Filter data for the current queen
+  queen_data <- wide_Ev_agg_perf_by_queen %>% filter(queen == q)
+  
+  # Calculate euclidean distance
+  # euclidean_distance <- expand.grid(
+  #   x = seq(0, 1.1 * max(queen_data$bias), length.out = 50),
+  #   y = seq(0, 1.1 * max(queen_data$se), length.out = 50)
+  # )
+  
+  #euclidean_distance$z <- with(euclidean_distance, sqrt(x^2 + y^2))
+  
+  # Create plot
+  p <- ggplot(queen_data, aes(bias, se)) +
+    geom_point(aes(color = type)) +
+
+    geom_label_repel(
+      aes(label = model, col = type),
+            size = 3, # Adjust label size
+
+      box.padding = 0.5,
+      point.padding = 0.1,
+      max.overlaps = Inf,
+      show.legend = F
+    ) +
+    geom_contour(
+      data = euclidean_distance,
+      aes(x = x, y = y, z = z),
+      breaks = c(50, 100, 150, 200)
+    ) +
+    theme_minimal() +
+    scale_x_continuous( limits = c( 0, 210 ), breaks = seq( 0, 200, by = 50 ) ) +
+    scale_y_continuous( limits = c( 0, 210 ), breaks = seq( 0, 200, by = 50 ) ) +
+
+
+    ggtitle(paste("Queen:", q))+
+    labs(
+        col = "Model Type"
+      ) +
+    xlab("Bias") +    # Change X-axis title
+    ylab("SE")      # Change Y-axis title
+
+  
+  plots[[length(plots) + 1]] <- p
+}
+
+library(ggpubr)
+# Arrange plots in a grid
+p = ggarrange(plots[[1]], plots[[2]], plots[[3]], plots[[4]], plots[[5]], plots[[6]], plots[[7]], plots[[8]],
+              plots[[9]],  plots[[10]], ncol=2,  common.legend = TRUE, legend="bottom")
+
+p
+```
+

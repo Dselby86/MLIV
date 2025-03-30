@@ -1,0 +1,1033 @@
+---
+title: "Results Template"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    df_print: paged
+    fig_caption: yes
+    fig_height: 8
+    fig_width: 10
+    highlight: pygments
+    theme: spacelab
+    toc: yes
+    toc_depth: 6
+    toc_float: yes
+  pdf_document:
+    toc: yes
+    toc_depth: '6'
+editor_options:
+  markdown:
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set( echo = TRUE )
+```
+
+# Exact call used to run the simulation
+
+Simulation parameters: CA, continuous outcome (AVG MONTHLY EARNINGS IN 2006 DOLLARS), train set of 1000, small covariate set, with sigma 0.2, with proportion treated set to proportion in real data. All models except SL, all queens including SL, 100 iters. Parallel.
+
+```{r eval=FALSE}
+ca_simulation <- run_simulation(
+                                # Required arguments
+                                real_data = ca_subset_imputed, 
+                                realdata_file_path = NULL,
+                                dataset_name = "ca",    
+                                covariates = ca_small_set,
+                                outcome = "Y18JBERNA_06",
+                                treatment = ca_treatment,
+                                
+                                # Optional arguments
+                                large_covariate_set = ca_large_set, 
+                                small_covariate_set = ca_small_set, 
+                                all_outcomes = ca_outcomes,
+                                S = 100,  
+                                queen_list = DEFAULT_QUEEN_LIST,
+                                p_tx = NULL,
+                                size_train = 1000,
+                                size_test = 10000, 
+                                PARALLEL = TRUE,
+                                verbose = 1000,
+                                include_LASSO = TRUE,
+                                include_RF = TRUE,
+                                include_SL_S = FALSE,
+                                include_SL_T = FALSE,
+                                include_CDML = TRUE,
+                                include_XGBOOST = TRUE,
+                                include_BART = TRUE,
+                                master_seed = NULL,
+                                baseline_seed = 68814, 
+                                baseline_N = 100000, 
+                                baseline_directory_path =  here::here("baseline"),
+                                true_iates_directory_path = here::here("true_iates"),
+                                today = Sys.Date() 
+                                )
+```
+
+# Functions
+
+#TODO:: MOVE
+
+YES
+
+```{r include=FALSE}
+#' aggregate_time_by_queen: Mean of processing time across obs by model and queen
+#'
+#' Needs to be stacked performance stats with a "queen" column
+#' indicating where the impacts came from.
+#'
+#' @param performance_stats Matrix of bias, SE, and RMSE 
+#'
+#' 
+
+aggregate_time_by_queen = function( performance_stats ) {
+  
+  stopifnot( "queen" %in% colnames(performance_stats) )
+  
+  agg_stat = performance_stats %>% 
+    filter( metric == "runtime") %>%
+    pivot_longer( cols = any_of( ALL_MODELS ),
+                  names_to = "model",
+                  values_to = "value" ) %>%
+    
+    group_by( model, queen ) %>%
+    summarise( runtime =mean( value ),
+               .groups = "drop")
+  
+  return( agg_stat )
+}
+```
+
+YES
+
+```{r include=FALSE}
+#' aggregated_performance_by_queen: Aggregate performance characteristics
+#' (Bias, SE, RMSE) across all observations by model by queen.
+#'
+#' Needs to be stacked performance stats with a "queen" column
+#' indicating where the impacts came from.
+#'
+#' @param performance_stats Matrix of bias, SE, and RMSE 
+#'
+#' NOTE/WARNING:
+#'   Bias is squared and then averaged, which will give a semi-funky
+#'   mean of of absolute bias.
+#' 
+
+aggregated_performance_by_queen <- function( performance_stats ) {
+  
+  stopifnot( "queen" %in% colnames(performance_stats) )
+  
+  agg_stat = performance_stats %>% 
+    pivot_longer( cols = any_of( ALL_MODELS ),
+                  names_to = "model",
+                  values_to = "value" ) %>%
+    filter( !( metric %in% c( "runtime", "percent_cut" ) ) ) %>%
+    group_by( metric, model, queen ) %>%
+    summarise( Ev = sqrt( mean( value^2 ) ),
+               Q1 = quantile( value, 0.25 ),
+               Q3 = quantile( value, 0.75 ),
+               .groups = "drop" ) 
+  
+  return( agg_stat )
+}
+```
+
+YES
+
+```{r include=FALSE}
+#' aggregate_outliers_by_queen: Mean percent of outliers cut by model and queen
+#'
+#' Needs to be stacked performance stats with a "queen" column
+#' indicating where the impacts came from.
+#'
+#' @param performance_stats Matrix of bias, SE, and RMSE 
+#'
+#' 
+
+aggregate_outliers_by_queen = function( performance_stats ) {
+  
+  stopifnot( "queen" %in% colnames(performance_stats) )
+  
+  agg_stat = performance_stats %>% 
+    filter( metric == "percent_cut") %>%
+    pivot_longer( cols = any_of( ALL_MODELS ),
+                  names_to = "model",
+                  values_to = "value" ) %>%
+    
+    group_by( model, queen ) %>%
+    summarise( percent_cut = ( mean( value ) * 100 ),
+               .groups = "drop")
+  
+  return( agg_stat )
+}
+```
+
+
+
+
+# Set up
+
+```{r include=FALSE}
+# Load script 08
+source(here::here("simulation_pipeline/08_run_simulation.R"))
+```
+
+>Load the raw output of your simulation here:
+
+```{r message=FALSE, warning=FALSE}
+# Load files from simulations we already ran
+aggregated_IATEs_data <- readRDS(here::here("results/aggregated_IATEs/ca/simulation_from_080524/aggregated_IATEs_data.rds"))
+# Set this to the name of the simulation output data you intend to use
+df = aggregated_IATEs_data
+```
+
+
+```{r}
+ALL_MODELS <- c("ATE", "OLS S", "RF INF","RF T","RF MOM IPW","RF MOM DR",
+                "CF","CF LC","CDML","LASSO INF", "LASSO T","LASSO MOM IPW",
+                "LASSO MOM DR", "LASSO MCM","LASSO MCM EA", "LASSO R", "SL T", 
+                "SL S", "XGBOOST S", "XGBOOST R", "BART T", "BART S")
+```
+
+
+```{r include=FALSE}
+# Aggregate performance (Bias, SE, RMSE) by queen
+agg_perf_by_queen = aggregated_performance_by_queen(df)
+```
+
+
+```{r include=FALSE}
+# Reshape agg_perf_by_queen so metrics are the columns
+wide_Ev_agg_perf_by_queen = pivot_wider(
+                                        data = agg_perf_by_queen,
+                                        id_cols = c("model", "queen" ),
+                                        names_from = metric,
+                                        values_from = Ev,
+                                        names_prefix = ""
+                                       )
+```
+
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+# Order by model by queen
+wide_Ev_agg_perf_by_queen <- wide_Ev_agg_perf_by_queen  %>% 
+                              arrange(factor(model, levels = ALL_MODELS), factor(queen, levels = ALL_MODELS))
+```
+
+
+```{r include=FALSE}
+# Mean of all queens that are already aggregated excluding ATE
+agg_agg_mean = wide_Ev_agg_perf_by_queen %>%
+                filter(queen != "ATE") %>% 
+                group_by(model) %>%
+                summarise(bias = mean(bias),
+                          SE = mean(se),
+                          RMSE = mean(rmse),
+                          .groups = "drop")
+```
+
+
+```{r include=FALSE}
+# Add type column
+agg_agg_mean = agg_agg_mean %>%
+                mutate(type = case_when(
+                       model == "ATE" ~ "ATE",
+                       model == "OLS S" ~ "OLS S",
+                       model %in% c("RF INF", "LASSO INF") ~ "INF",
+                       model %in% c("RF T", "RF MOM IPW", "RF MOM DR", "CF", "CF LC") ~ "RF",
+                       model %in% c("LASSO T", "LASSO MOM IPW", "LASSO MOM DR", "LASSO MCM", "LASSO MCM EA", "LASSO R") ~ "LASSO",
+                       model == "CDML" ~ "CDML",
+                       model %in% c("BART T", "BART S") ~ "BART",
+                       model %in% c("XGBOOST S", "XGBOOST R") ~ "XGBOOST",
+                       model %in% c("SL T", "SL S") ~ "SL",
+                       TRUE ~ "Unknown"
+                       ))
+```
+
+
+```{r include=FALSE}
+# Add type column
+wide_Ev_agg_perf_by_queen = wide_Ev_agg_perf_by_queen %>%
+                              mutate(type = case_when(
+                                     model == "ATE" ~ "ATE",
+                                     model == "OLS S" ~ "OLS",
+                                     model %in% c("RF INF", "LASSO INF") ~ "INF",
+                                     model %in% c("RF T", "RF MOM IPW", "RF MOM DR", "CF", "CF LC") ~ "RF",
+                                     model %in% c("LASSO T", "LASSO MOM IPW", "LASSO MOM DR", "LASSO MCM", "LASSO MCM EA", "LASSO R") ~ "LASSO",
+                                     model == "CDML" ~ "CDML",
+                                     model %in% c("BART T", "BART S") ~ "BART",
+                                     model %in% c("XGBOOST S", "XGBOOST R") ~ "XGBOOST",
+                                     model %in% c("SL T", "SL S") ~ "SL",
+                                     TRUE ~ "Unknown"
+                                    ))
+```
+
+
+```{r include=FALSE}
+# Calculate 75th quantile (Q3) instead of mean
+agg_agg_q3 <- wide_Ev_agg_perf_by_queen %>%
+                filter(queen != "ATE") %>% 
+                group_by(model) %>%
+                summarise(Q3_bias = quantile(bias, probs = 0.75),
+                          Q3_SE = quantile(se, probs = 0.75),
+                          Q3_RMSE = quantile(rmse, probs = 0.75),
+                          .groups = "drop")
+```
+
+
+```{r include=FALSE}
+# Calculate 25th quantile (Q1) instead of mean
+agg_agg_q1 <- wide_Ev_agg_perf_by_queen %>%
+                filter(queen != "ATE") %>% 
+                group_by(model) %>%
+                summarise(Q1_bias = quantile(bias, probs = 0.25),
+                          Q1_SE = quantile(se, probs = 0.25),
+                          Q1_RMSE = quantile(rmse, probs = 0.25),
+                          .groups = "drop")
+```
+
+
+```{r include=FALSE}
+# Aggregate by mean percentage of outliers cut by queen and model
+percent_cut = aggregate_outliers_by_queen(df)
+```
+
+
+```{r include=FALSE}
+# Calculate mean of mean of mean percent of outliers cut
+agg_percent_cut <- percent_cut %>%
+                    filter(queen != "ATE") %>% 
+                    group_by(model) %>%
+                    summarise(percent_cut = mean(percent_cut),
+                              .groups = "drop")
+```
+
+
+```{r include=FALSE}
+# Aggregate by mean run time by queen and model
+runtime <- aggregate_time_by_queen(df)
+```
+
+
+```{r include=FALSE}
+# Calculate mean of mean of mean run time
+agg_runtime <- runtime %>%
+                filter(queen != "ATE") %>% 
+                group_by(model) %>%
+                summarise(runtime = mean(runtime),
+                          .groups = "drop")
+```
+
+# Who won?
+
+## How we aggregate the performance measures (step-by-step)
+
+### Bias, SE, RMSE
+
+* Under the hood, meaning we never see or output this data due to the luck of memory, we calculate predicted tau for each model (17 if all) for 10,000 (obs in test set) for all queens (15 when all models included) for all iterations (50): 17 x 10,000 x 15 x 50 = **127,500,000** obs. We also have 10,000 real taus in the test set (actually they are predicted too, but we treat them as if they are real - that is the whole idea of simulation).
+  1. We aggregate predicted tau across simulation using mean (by model, by queen, by obs): 17 × 15 × 10,000 = 2,550,000 obs
+  2. By model, by queen, by obs we subtract real tau from predicted tau to get 2,550,000 obs for **bias**
+  3. Next we calculate squared errors by model, by queen, by obs using this formula: `(predicted tau - real tau)^2`. This results in 17 x 10,000 x 15 x 50 = **127,500,000** obs for squared error.
+  4. To calculate RMSE we take the mean squared error across simulations (still grouping by obs, model, and queen) and take the square root (still grouping by obs, model, and queen): `rmse = sqrt( apply( errs2, 2:3, mean ) )`. So we end up with 17 × 15 × 10,000 = 2,550,000 obs for **RMSE**. *Note:* `2:3` mean that we take the average across simulation runs, as our data is a 3D matrix of simulation runs by obs by model. So we are averaging across the dimension number one. There is the forth dimension under the hood - queen - but we are using a loop to handle that. So for each queen we have 3D matrix of 50 x 10,000 x 17 instead of 4D matrix.
+  5. To calculate standard error by obs, by model, by queen we take a standard deviation across simulation runs, resulting in 17 × 15 × 10,000 = 2,550,000 obs for **SE**.
+* So at this point we have 3 x 17 x 10,000 x 15 = 7,650,000 obs. 3 is there because we have 3 performance metrics: bias, RMSE, SE. This 7,650,000 obs we save and refer to as raw output of our simulation. Now, it's time to aggregate it further.
+* We group data by MODEL by QUEEN, and aggregate using `sqrt( mean( value^2 ) )` where `value` is bias, SE, or RMSE, across 10,000 obs, resulting in 3 x 17 x 15 = 765 obs. *Note:* Bias is squared and then averaged, which will give a semi-funky mean of of absolute bias.
+* We filter out data when ATE is a queen - down to 714 obs.
+* Next, we group that aggregated data by MODEL again, and we add another level of aggregation: we take the MEAN of that aggregated data - resulting in a data table with 17 obs and columns for 3 metrics (714/3/14 = 17). This is what you see in Table 1 and contour graph.
+So it is a mean across queens of the data aggregated by model and queen using `sqrt( mean( value^2 ) )`.
+
+### Bias75, SE75, RMSE75
+- So imagine all of the steps above except the last one are completed. So we at at 714 obs now of the data is aggregated by model and queen using `sqrt( mean( value^2 ) )`. Now, instead of taking the mean by model across queens, we take the third quintile. That is it.
+
+### IQR_RMSE
+- Imagine in the step above we not only took the third quintile but also the first one for RMSE. We do `3rd - 1st` to get IQR.
+
+### Prop_Extreme
+- This is a proportion of extreme outliers cut and replaced with floor and ceiling values (on a 0-100% scale)
+- We say no treatment impact for *any* method could be larger than one effect size unit. This is how we calculate it: 
+
+```{r eval=FALSE}
+sd_Y0_real = sd( Y0 )
+ATE_real = mean( Yobs[Z==1] ) - mean( Yobs[Z==0] )
+
+predictions = model( x_tr, y_tr, d_tr, x_val )
+p_broke = ifelse(abs(predictions - ATE_real) > sd_Y0_real, 1, 0)
+    
+predictions[ (predictions-ATE_real) > sd_Y0_real ] = ATE_real + sd_Y0_real
+predictions[ (predictions-ATE_real) < -sd_Y0_real ] = ATE_real - sd_Y0_real
+```
+
+- At this point, under the hood, meaning we never see or output this data due to the luck of memory, we assign flag of 0 or 1 for each model (17 if all) for 10,000 (obs in test set) for all queens (15 when all models included) for all iterations (50): 17 x 10,000 x 15 x 50 = 127,500,000 obs to `p_broke`.
+- We aggregate `p_broke` flag across simulation using mean (by model, by queen, by obs): 17 × 15 × 10,000 = 2,550,000 obs. So now we now the proportion of flagged predictions across simulations by model, by queen, by obs.
+- We group data by MODEL by QUEEN, and aggregate using `mean( value ) * 100` where value is flagged predictions across simulations, across 10,000 obs, resulting in 17 x 15 = 255 obs.
+- We filter out data when ATE is a queen - down to 238 obs.
+- Next, we group that aggregated data by MODEL again, and we add another level of aggregation: we take the MEAN of that aggregated data - resulting in a data table with 17 obs (238/14 = 17). This is what you see in Table 1.
+So it is a mean( mean by 100 ( mean )). *Note:* Almost always the proportion ends up being less than 1%.
+
+### Comp_Time
+
+- Under the hood, meaning we never see or output this data due to the luck of memory, we assign the number seconds it took to run a model for each model (17 if all) for all queens (15 when all models included) for all iterations (50). Although we calculate it on the model level, not on the obs level, we still repeat this number 10,000 times for each observation, just because it is easier in terms of coding: 17 x 10,000 x 15 x 50 = 127,500,000 obs to `runtime`.
+- We aggregate `runtime` across simulation using mean (by model, by queen, by obs): 17 × 15 × 10,000 = 2,550,000 obs. So now we now the mean time it took to run across the simulation runs.
+- We group data by MODEL by QUEEN, and aggregate using `mean()` across 10,000 obs, resulting in 17 x 15 = 255 obs. It actually does not matter what we use here as all 10,000 obs are the same, we could have taken `first()`, or `max()`, or `median()`, the number would stay the same. So now we now the number of seconds it took to run one model on average by model by queen. *Note:* If you want to calculate how much it takes to run the who thing you do: sum(255 obs of runtime) ~ 30,750 sec, then 30,750 sec / 60 = 512.5 min then  512.5 min / 60 = 8.5 hours. But we do not nees this number, we need to know how muvh time on average it takes to run one model across queens.
+- We filter out data when ATE is a queen - down to 238 obs.
+- We group that 255 obs by MODEL again, and we add another level of aggregation: we take the MEAN of that aggregated data - resulting in a data table with 17 obs (238/14 = 17). This is what you see in Table 1. *Reminder:* The number in the table is in **seconds**.
+
+
+## Table 1
+
+```{r include=FALSE}
+# Merge table 1
+merged_table_1 <- merge(agg_agg_mean, agg_agg_q1 , by = "model")
+merged_table_1 <- merge(merged_table_1, agg_agg_q3 , by = "model")
+```
+
+```{r include=FALSE}
+# Merge table 1
+merged_table_1 <- merge(merged_table_1, agg_percent_cut , by = "model")
+```
+
+```{r include=FALSE}
+# Merge table 1
+merged_table_1 <- merge(merged_table_1, agg_runtime , by = "model")
+```
+
+```{r include=FALSE}
+# Add IQR
+merged_table_1$IQR_RMSE <- merged_table_1$Q3_RMSE - merged_table_1$Q1_RMSE
+```
+
+```{r include=FALSE}
+# Remove columns
+merged_table_1 <- merged_table_1[, !(names(merged_table_1) %in% c("type", "Q1_RMSE", "Q1_bias", "Q1_SE"))]
+```
+
+```{r include=FALSE}
+# Rename columns
+colnames(merged_table_1)[colnames(merged_table_1) == "percent_cut"] <- "Prop_Extreme"
+```
+
+```{r include=FALSE}
+# Rename columns
+colnames(merged_table_1)[colnames(merged_table_1) == "bias"] <- "Bias"
+```
+
+```{r include=FALSE}
+# Rename columns
+colnames(merged_table_1)[colnames(merged_table_1) == "Q3_bias"] <- "Bias75"
+```
+
+```{r include=FALSE}
+# Rename columns
+colnames(merged_table_1)[colnames(merged_table_1) == "Q3_SE"] <- "SE75"
+```
+
+```{r include=FALSE}
+# Rename columns
+colnames(merged_table_1)[colnames(merged_table_1) == "Q3_RMSE"] <- "RMSE75"
+```
+
+```{r include=FALSE}
+# Rename columns
+colnames(merged_table_1)[colnames(merged_table_1) == "runtime"] <- "Comp_Time"
+```
+
+```{r include=FALSE}
+# Rename columns
+colnames(merged_table_1)[colnames(merged_table_1) == "model"] <- "Model"
+```
+
+```{r include=FALSE}
+# Reorder columns
+merged_table_1 <- merged_table_1 %>%
+                    select(Model, Prop_Extreme, Bias, SE, RMSE, Bias75, SE75, RMSE75, IQR_RMSE, Comp_Time)
+```
+
+```{r include=FALSE}
+# Sort
+merged_table_1 <- merged_table_1[order(merged_table_1$RMSE), ]
+```
+
+```{r include=FALSE}
+# Get the indices of numeric columns except the "Model" column
+numeric_cols <- sapply(merged_table_1, is.numeric) & names(merged_table_1) != "Model"
+
+# Round the numeric columns except the "Model" column to two decimal places
+merged_table_1[, numeric_cols] <- round(merged_table_1[, numeric_cols], 2)
+```
+
+Table 1 shows the overall performance characteristics of each model against chosen scenario. Two “Infeasible” models are also included, a Lasso and a Random Forest that are given the true CATEs for the training data. These serve as a benchmark for ideal performance, setting aside the estimation error due to the treatment/control difference and focusing on the ability of the model to fit the queen’s pattern of CATEs and also the representatives of the training sample of the larger population. 
+
+```{r}
+# Install and load the writexl package if not already installed
+if (!require(writexl)) {
+  install.packages("writexl")
+  library(writexl)
+}
+
+
+# Save Table 1
+write_xlsx(merged_table_1, path = here::here("graphs/ca/train_1000/small_cov_set/table_1.xlsx"))
+```
+
+
+```{r echo=FALSE}
+library(knitr)
+
+# Generate a formatted table using kable and kableExtra
+kable(merged_table_1, row.names = FALSE, caption = "Rows sorted by lowest RMSE to highest.") 
+```
+
+Table 1: `Prop_extreme` is the proportion of the test set that was thresholded due to extreme predictions. Scale for `Prop_extreme` is 0-100%, so all values in the table are LESS THAN 1%. `Bias`, `SE`, `RMSE` are averaged across all Queens.  `Bias75`, `SE75`, `RMSE75` are the 75th percentile of the bias, se and RMSE across Queens, indicating how bad “poor performance” tends to be. IQR is the inner quantile range of the RMSE values across all queens. `Comp_Time` is the average computational time for fitting ONE model in seconds. Rows sorted by lowest RMSE to highest.
+
+## Figure 2
+
+**Mean of aggregated bias and SE across queens for each estimator**
+
+*ATE queen excluded*
+
+*Unadjusted scale + RMSE contour added*:
+
+```{r include=FALSE}
+# Contours for RMSE
+euclidean_distance = expand.grid(x = seq( 0, 1.1*max(agg_agg_mean$bias), length.out=50 ),
+                                 y = seq(0, 1.1*max(agg_agg_mean$SE), length.out=50 ) )
+
+euclidean_distance$z = with(euclidean_distance, sqrt(x^2 + y^2))
+```
+
+
+```{r}
+# Adjusting your plot
+p <- ggplot(agg_agg_mean, aes(bias, SE)) +
+  geom_point(aes(color = type), size = 3) +
+  geom_label_repel(
+    aes(label = model, col = type),
+    size = 4, # Increased label size
+    box.padding = 0.75,
+    point.padding = 0.25,
+    max.overlaps = Inf,
+    show.legend = FALSE
+  ) +
+  geom_contour(
+    data = euclidean_distance,
+    aes(x = x, y = y, z = z),
+    breaks = c(50, 100, 150, 200)
+  ) +
+  theme_minimal() +
+  theme(
+    plot.background = element_rect(fill = "white", color = NA),
+    panel.background = element_rect(fill = "white", color = NA),
+    text = element_text(color = "black"),
+    plot.title = element_text(size = 16),
+    plot.subtitle = element_text(size = 12),
+    axis.title = element_text(size = 14),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 12)
+  ) +
+  labs(
+    title = "Mean of Aggregated Bias and SE across Queens\nfor Each Algorithm with RMSE Contouring",
+    subtitle = "* ATE queen is excluded",
+    col = "Model Type"
+  ) +
+  xlab("Bias") +    # Change X-axis title
+  ylab("SE")       # Change Y-axis title
+
+```
+
+```{r}
+p
+```
+
+```{r}
+# Change to your folder
+ggsave(here::here("graphs/ca/train_1000/small_cov_set/plot_1_wo_ATE.png"), p, width = 8, height = 6, units = "in", bg = 'white')
+```
+
+# Plot 1 by queen
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+# Contours for RMSE
+euclidean_distance = expand.grid( x = seq( 0, 1.1*max( wide_Ev_agg_perf_by_queen$bias ), length.out=50 ),
+                                  y = seq( 0, 1.1*max( wide_Ev_agg_perf_by_queen$se ), length.out=50 ) )
+
+euclidean_distance$z = with(euclidean_distance, sqrt( x^2 + y^2 ) )
+```
+
+```{r}
+library( ggpubr )
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+# Iterate over unique queens
+queens <- unique(wide_Ev_agg_perf_by_queen$queen)
+
+# Create a list to store plots
+plots <- list()
+
+# Iterate over queens
+for (q in queens) {
+  # Filter data for the current queen
+  queen_data <- wide_Ev_agg_perf_by_queen %>% filter(queen == q)
+  
+  # Create plot
+ 
+   p <- ggplot(queen_data, aes(bias, se)) +
+        geom_point(aes(color = type), size = 3) +
+        geom_label_repel(
+          aes(label = model, col = type),
+          size = 4, # Increased label size
+          box.padding = 0.75,
+          point.padding = 0.25,
+          max.overlaps = Inf,
+          show.legend = FALSE
+        ) +
+        geom_contour(
+          data = euclidean_distance,
+          aes(x = x, y = y, z = z),
+          breaks = c(50, 100, 150, 200)
+        ) +
+        theme_minimal() +
+        scale_x_continuous( limits = c( 0, 300 ), breaks = seq( 0, 200, by = 50 ) ) +
+        scale_y_continuous( limits = c( 0, 300 ), breaks = seq( 0, 250, by = 50 ) ) +
+        theme(
+          plot.background = element_rect(fill = "white", color = NA),
+          panel.background = element_rect(fill = "white", color = NA),
+          text = element_text(color = "black"),
+          plot.title = element_text(size = 16),
+          plot.subtitle = element_text(size = 12),
+          axis.title = element_text(size = 14),
+          legend.title = element_text(size = 14),
+          legend.text = element_text(size = 12)
+        ) +
+        ggtitle(paste("Queen:", q))+
+        labs(
+          col = "Model Type"
+        ) +
+        xlab("Bias") +    # Change X-axis title
+        ylab("SE")       # Change Y-axis title
+
+  plots[[length(plots) + 1]] <- p
+}
+```
+
+```{r}
+library(ggpubr)
+# Arrange plots in a grid
+p = ggarrange(plots[[1]], plots[[2]], plots[[3]], plots[[4]], plots[[5]], plots[[6]], plots[[7]], plots[[8]],
+              plots[[9]],  plots[[10]], plots[[11]], ncol=2,  common.legend = TRUE, legend="bottom")
+
+p
+```
+
+
+```{r}
+# RSS Presentation plot 2
+
+p = ggarrange(plots[[1]],  plots[[6]], ncol=2,  common.legend = TRUE, legend="bottom")
+
+p
+```
+
+```{r}
+# Change to your folder
+ggsave(here::here("graphs/ca/train_1000/small_cov_set/plot_1_ATE_CDML.png"), p, width = 10, height = 4, units = "in", bg = 'white')
+```
+
+
+
+```{r}
+queens <- unique(wide_Ev_agg_perf_by_queen$queen)
+
+
+
+
+ATE_queen_data <- wide_Ev_agg_perf_by_queen %>% filter(queen == "ATE")
+CDML_queen_data <- wide_Ev_agg_perf_by_queen %>% filter(queen == "CDML")
+
+# Combine data
+combined_data <- bind_rows(ATE_queen_data, CDML_queen_data)
+
+# Plot
+ggplot(combined_data, aes(x = bias, y = se, color = queen)) +
+  geom_point(size = 3) +
+  geom_text(aes(label = model), vjust = -1) +
+  theme_minimal() +
+  labs(title = "Overlayed ATE and CDML",
+       x = "Bias",
+       y = "SE")
+```
+```{r}
+  p <- ggplot(combined_data, aes(bias, se)) +
+        geom_point(aes(color = queen), size = 3) +
+        geom_label_repel(
+          aes(label = model, col = queen),
+          size = 4, # Increased label size
+          box.padding = 0.75,
+          point.padding = 0.25,
+          max.overlaps = Inf,
+          show.legend = FALSE
+        ) +
+        geom_contour(
+          data = euclidean_distance,
+          aes(x = x, y = y, z = z),
+          breaks = c(50, 100, 150, 200)
+        ) +
+        theme_minimal() +
+        # scale_x_continuous( limits = c( 0, 300 ), breaks = seq( 0, 200, by = 50 ) ) +
+        # scale_y_continuous( limits = c( 0, 300 ), breaks = seq( 0, 250, by = 50 ) ) +
+        theme(
+          plot.background = element_rect(fill = "white", color = NA),
+          panel.background = element_rect(fill = "white", color = NA),
+          text = element_text(color = "black"),
+          plot.title = element_text(size = 16),
+          plot.subtitle = element_text(size = 12),
+          axis.title = element_text(size = 14),
+          legend.title = element_text(size = 14),
+          legend.text = element_text(size = 12)
+        ) +
+        ggtitle(paste("Queen:", q))+
+        labs(
+          col = "Model Type"
+        ) +
+        xlab("Bias") +    # Change X-axis title
+        ylab("SE")       # Change Y-axis title
+```
+
+```{r}
+p
+```
+```{r}
+# Define shapes for each model type
+shape_map <- c(
+  "ATE" = 0, "OLS S" = 1, "RF INF" = 2, "RF T" = 3, "RF MOM IPW" = 4, "RF MOM DR" = 5, 
+  "CF" = 6, "CF LC" = 7, "CDML" = 8, "LASSO INF" = 9, "LASSO T" = 10, "LASSO MOM IPW" = 11, 
+  "LASSO MOM DR" = 12, "LASSO MCM" = 13, "LASSO MCM EA" = 14, "LASSO R" = 15, 
+  "SL T" = 16, "SL S" = 17, "XGBOOST S" = 18, "XGBOOST R" = 19, "BART T" = 20, "BART S" = 21
+)
+
+p <- ggplot(combined_data, aes(bias, se)) +
+  geom_point(aes(color = queen, shape = model), size = 3) +
+  theme_minimal() +
+  theme(
+    plot.background = element_rect(fill = "white", color = NA),
+    panel.background = element_rect(fill = "white", color = NA),
+    text = element_text(color = "black"),
+    plot.title = element_text(size = 16),
+    plot.subtitle = element_text(size = 12),
+    axis.title = element_text(size = 14),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 12)
+  ) +
+  ggtitle("Queen: Combined ATE and CDML") +
+  labs(
+    col = "Model Type",
+    shape = "Model"
+  ) +
+  xlab("Bias") +    # Change X-axis title
+  ylab("SE") +      # Change Y-axis title
+  scale_shape_manual(values = shape_map)
+
+print(p)
+```
+```{r}
+# Define shapes for each model type
+shape_map <- c(
+  "ATE" = 0, "OLS S" = 1, "RF INF" = 2, "RF T" = 3, "RF MOM IPW" = 4, "RF MOM DR" = 5, 
+  "CF" = 6, "CF LC" = 7, "CDML" = 8, "LASSO INF" = 9, "LASSO T" = 10, "LASSO MOM IPW" = 11, 
+  "LASSO MOM DR" = 12, "LASSO MCM" = 13, "LASSO MCM EA" = 14, "LASSO R" = 15, 
+  "SL T" = 16, "SL S" = 17, "XGBOOST S" = 18, "XGBOOST R" = 19, "BART T" = 20, "BART S" = 21
+)
+
+p <- ggplot(combined_data, aes(bias, se)) +
+  geom_point(aes(color = queen, shape = model), size = 3) +
+  theme_minimal() +
+  theme(
+    plot.background = element_rect(fill = "white", color = NA),
+    panel.background = element_rect(fill = "white", color = NA),
+    text = element_text(color = "black"),
+    plot.title = element_text(size = 16),
+    plot.subtitle = element_text(size = 12),
+    axis.title = element_text(size = 14),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 12),
+    legend.position = "right",
+    legend.box = "vertical"
+  ) +
+  ggtitle("Queen: Combined ATE and CDML") +
+  labs(
+    col = "Queen",
+    shape = "Model"
+  ) +
+  xlab("Bias") +    # Change X-axis title
+  ylab("SE") +      # Change Y-axis title
+  scale_shape_manual(values = shape_map) +
+  guides(
+    shape = guide_legend(ncol = 1, order = 1), # Single-column legend for shapes on the right
+    color = guide_legend(override.aes = list(size = 5), order = 2) # Separate legend for colors under the plot
+  ) +
+  theme(
+    legend.position = "right", 
+    legend.justification = c(1, 0.5), 
+    legend.box.just = "center", 
+    legend.box = "horizontal"
+  )
+
+print(p)
+```
+```{r}
+library(ggplot2)
+library(ggrepel)
+library(cowplot)
+# Define shapes for each model type
+shape_map <- c(
+  "ATE" = 0, "OLS S" = 1, "RF INF" = 2, "RF T" = 3, "RF MOM IPW" = 4, "RF MOM DR" = 5, 
+  "CF" = 6, "CF LC" = 7, "CDML" = 8, "LASSO INF" = 9, "LASSO T" = 10, "LASSO MOM IPW" = 11, 
+  "LASSO MOM DR" = 12, "LASSO MCM" = 13, "LASSO MCM EA" = 14, "LASSO R" = 15, 
+  "SL T" = 16, "SL S" = 17, "XGBOOST S" = 18, "XGBOOST R" = 19, "BART T" = 20, "BART S" = 21
+)
+
+p <- ggplot(combined_data, aes(bias, se)) +
+  geom_point(aes(color = queen, shape = model), size = 3) +
+  theme_minimal() +
+  theme(
+    plot.background = element_rect(fill = "white", color = NA),
+    panel.background = element_rect(fill = "white", color = NA),
+    text = element_text(color = "black"),
+    plot.title = element_text(size = 16),
+    plot.subtitle = element_text(size = 12),
+    axis.title = element_text(size = 14),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 12),
+    legend.position = "right",
+    legend.box = "vertical"
+  ) +
+  ggtitle("Queen: Combined ATE and CDML") +
+  labs(
+    col = "Queen",
+    shape = "Model"
+  ) +
+  xlab("Bias") +    # Change X-axis title
+  ylab("SE") +      # Change Y-axis title
+  scale_shape_manual(values = shape_map) +
+  guides(
+    shape = guide_legend(ncol = 1, title.position = "top", order = 1), # Single-column legend for shapes on the right
+    color = guide_legend(nrow = 1, title.position = "top", order = 2, 
+                         label.position = "bottom", position = "bottom") # Legend for colors under the plot
+  ) +
+  theme(
+    legend.box = "vertical",
+    legend.position = "right",
+    legend.direction = "vertical",
+    plot.margin = unit(c(1, 1, 1, 1), "cm") # add margin to fit the bottom legend
+  ) +
+  guides(
+    color = guide_legend(
+      title = "Queen", nrow = 1,
+      label.position = "bottom", label.hjust = 0.5,
+      override.aes = list(size = 5)
+    )
+  )
+
+# Extract the color legend separately
+p_color_legend <- p + theme(legend.position = "bottom") + guides(shape = "none")
+
+# Arrange plots and legends
+plot_with_legend <- plot_grid(
+  p + theme(legend.position = "none"), # Main plot without legends
+  get_legend(p), # Model legend on the right
+  ncol = 2, rel_widths = c(1, 0.2)
+)
+
+final_plot <- plot_grid(
+  plot_with_legend, # Plot with model legend
+  get_legend(p_color_legend), # Queen legend at the bottom
+  ncol = 1, rel_heights = c(1, 0.1)
+)
+
+print(final_plot)
+```
+
+```{r}
+p_color_legend
+```
+```{r}
+p
+```
+
+
+
+```{r}
+library(ggplot2)
+library(cowplot)
+
+# Define shapes for each model type
+shape_map <- c(
+  "ATE" = 0, "OLS S" = 1, "RF INF" = 2, "RF T" = 3, "RF MOM IPW" = 4, "RF MOM DR" = 5, 
+  "CF" = 6, "CF LC" = 7, "CDML" = 8, "LASSO INF" = 9, "LASSO T" = 10, "LASSO MOM IPW" = 11, 
+  "LASSO MOM DR" = 12, "LASSO MCM" = 13, "LASSO MCM EA" = 14, "LASSO R" = 15, 
+  "SL T" = 16, "SL S" = 17, "XGBOOST S" = 18, "XGBOOST R" = 19, "BART T" = 20, "BART S" = 21
+)
+
+p <- ggplot(combined_data, aes(bias, se)) +
+  geom_point(aes(color = queen, shape = model), size = 3) +
+  theme_minimal() +
+  theme(
+    plot.background = element_rect(fill = "white", color = NA),
+    panel.background = element_rect(fill = "white", color = NA),
+    text = element_text(color = "black"),
+    plot.title = element_text(size = 16),
+    plot.subtitle = element_text(size = 12),
+    axis.title = element_text(size = 14),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 12),
+    legend.position = "right",
+    legend.box = "vertical",
+    plot.margin = unit(c(1, 2, 2, 1), "cm") # Added margin to fit the bottom legend
+  ) +
+  ggtitle("Queen: Combined ATE and CDML") +
+  labs(
+    col = "Queen",
+    shape = "Model"
+  ) +
+  xlab("Bias") +
+  ylab("SE") +
+  scale_shape_manual(values = shape_map) +
+  guides(
+    shape = guide_legend(ncol = 1, title.position = "top", order = 1),
+    color = guide_legend(nrow = 1, title.position = "top", order = 2, 
+                         label.position = "bottom", position = "bottom")
+  )
+
+# Extract legends
+legend_shape <- get_legend(p + theme(legend.position = "right"))
+legend_color <- get_legend(p + theme(legend.position = "bottom") + guides(shape = "none"))
+
+# Arrange plots and legends
+plot_with_legend <- plot_grid(
+  p + theme(legend.position = "none"), # Main plot without legends
+  legend_shape, # Model legend on the right
+  ncol = 2, rel_widths = c(1, 0.2)
+)
+
+final_plot <- plot_grid(
+  plot_with_legend, # Plot with model legend
+  legend_color, # Queen legend at the bottom
+  ncol = 1, rel_heights = c(1, 0.1)
+)
+
+print(final_plot)
+```
+```{r}
+queens <- unique(wide_Ev_agg_perf_by_queen$queen)
+
+
+
+
+ATE_queen_data <- wide_Ev_agg_perf_by_queen %>% filter(queen == "ATE")
+CDML_queen_data <- wide_Ev_agg_perf_by_queen %>% filter(queen == "CDML")
+
+# Combine data
+combined_data <- bind_rows(ATE_queen_data, CDML_queen_data)
+
+data <- combined_data
+
+# Load necessary libraries
+library(ggplot2)
+library(cowplot)
+library(grid)
+
+# Define shapes for each model
+model_shapes <- c('ATE' = 16, 'OLS S' = 17, 'RF INF' = 18, 'RF T' = 20, 'RF MOM IPW' = 15, 
+                  'RF MOM DR' = 7, 'CF' = 8, 'CF LC' = 9, 'CDML' = 10, 'LASSO INF' = 11, 
+                  'LASSO T' = 12, 'LASSO MOM IPW' = 13, 'LASSO MOM DR' = 14, 'LASSO MCM' = 3, 
+                  'LASSO MCM EA' = 4, 'LASSO R' = 5, 'XGBOOST S' = 6, 'XGBOOST R' = 21, 
+                  'BART T' = 22, 'BART S' = 24)
+
+# Create the plot
+plot <- ggplot(data, aes(x = bias, y = se, color = queen, shape = model)) +
+  geom_point(size = 4) +
+  scale_shape_manual(values = model_shapes) +
+  theme_bw() +
+  labs(title = "Bias vs SE by Model and Queen", x = "Bias", y = "SE") +
+  theme(plot.title = element_text(hjust = 0.5, size = 14))#, face = "bold"))
+
+# Extract the legends
+legend_shape <- get_legend(plot + guides(shape = guide_legend(ncol = 2, override.aes = list(colour = "black"))) + theme(legend.position = "right"))
+legend_color <- get_legend(plot + guides(color = guide_legend(nrow = 1, title = "Queen")) + theme(legend.position = "bottom"))
+
+# Remove legends from the plot
+plot <- plot + theme(legend.position = "none")
+
+# Create a white background canvas
+background <- ggdraw() + draw_grob(rectGrob(gp=gpar(fill="white", col=NA)))
+
+# Combine the plot and legends with adjusted spacing
+combined_plot <- plot_grid(plot, legend_shape, legend_color, ncol = 1, rel_heights = c(4, 1, 1), align = 'v')
+
+# Overlay the plot on the white background and adjust the layout
+final_plot <- ggdraw() + 
+  draw_grob(rectGrob(gp=gpar(fill="white", col=NA))) + 
+  draw_plot(plot, 0, 0, 0.61, 1) +  # Adjust plot size
+  draw_plot(legend_shape, 0.65, 0.2, 0.32, 0.6, hjust = 0, vjust = 0) +  # Adjust shape legend position
+  draw_plot(legend_color, 0, -0.1, 1, 0.2, hjust = 0, vjust = 0)  # Adjust color legend position
+
+# Print the final plot
+print(final_plot)
+
+```
+
+
+```{r}
+# Change to your folder
+ggsave(here::here("graphs/ca/train_1000/small_cov_set/plot_1_ATE_CDML_2.png"), final_plot, width = 10, height = 5, units = "in", bg = 'white')
+```
+
+
+
+```{r}
+# Define shapes for each model
+type_shapes <- c('ATE' = 1, 'BART' = 2, 'CDML' = 10, 'INF' = 6, 'LASSO' = 0, 
+                  'OLS' = 7, 'RF' = 8, 'XGBOOST' = 9)
+
+# Create the plot
+plot <- ggplot(data, aes(x = bias, y = se, color = queen, shape = type)) +
+  geom_point(size = 4) +
+  scale_shape_manual(values = type_shapes) +
+  theme_bw() +
+  labs(title = "Bias vs SE by Model and Queen", x = "Bias", y = "SE") +
+  theme(plot.title = element_text(hjust = 0.5, size = 14))#, face = "bold"))
+
+# Extract the legends
+legend_shape <- get_legend(plot + guides(shape = guide_legend(ncol = 1,  title = "model", override.aes = list(colour = "black"))) + theme(legend.position = "right"))
+legend_color <- get_legend(plot + guides(color = guide_legend(nrow = 1, title = "Queen")) + theme(legend.position = "bottom"))
+
+# Remove legends from the plot
+plot <- plot + theme(legend.position = "none")
+
+# Create a white background canvas
+background <- ggdraw() + draw_grob(rectGrob(gp=gpar(fill="white", col=NA)))
+
+# Combine the plot and legends with adjusted spacing
+combined_plot <- plot_grid(plot, legend_shape, legend_color, ncol = 1, rel_heights = c(4, 1, 1), align = 'v')
+
+# Overlay the plot on the white background and adjust the layout
+final_plot <- ggdraw() + 
+  draw_grob(rectGrob(gp=gpar(fill="white", col=NA))) + 
+  draw_plot(plot, 0, 0, 0.81, 1) +  # Adjust plot size
+  draw_plot(legend_shape, 0.77, 0.2, 0.32, 0.6, hjust = 0, vjust = 0) +  # Adjust shape legend position
+  draw_plot(legend_color, 0, -0.1, 1, 0.2, hjust = 0, vjust = 0)  # Adjust color legend position
+
+# Print the final plot
+print(final_plot)
+
+```
+
+```{r}
+# Change to your folder
+ggsave(here::here("graphs/ca/train_1000/small_cov_set/plot_1_ATE_CDML_3.png"), final_plot, width = 10, height = 5, units = "in", bg = 'white')
+```
+
+
+
