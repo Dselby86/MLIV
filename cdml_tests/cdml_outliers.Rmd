@@ -1,0 +1,338 @@
+---
+title: "Testing new outliers approach"
+output: html_document
+date: "2024-02-12"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+###################################################################################
+#                                                                                                        
+#                                                                         
+# Created on:   10/02/2023
+# Purpose:      Create simulation launcher function
+# Authors:      Luke Miratrix, Polina Polskaia, Nick Commins
+# 
+#
+###################################################################################
+
+
+###################################################################################
+# STEP 0: SET UP 
+###################################################################################
+
+
+# In order for all program paths to load we need to use here::here
+library( here )
+
+# Load everything
+
+source( here::here( "simulation_v2/07_MLIV_simulation_driver.R" ) ) 
+
+
+###################################################################################
+# STEP 1: DEFINE COVARIATES, OUTCOMES, AND TREATMENT NAMES FOR EACH DATASET 
+###################################################################################
+
+#TODO:: Remove?
+#TODO:: Add ASAP and GM
+
+# Create a lookup_table to search for needed variable name inside the simulation function
+lookup_table = list(
+  mnd = list( 
+    outcomes = c( "Y_continuous", "Y_binary" ), 
+    covariates = list(
+      small = c( "X1", "X2", "X3" ),
+      medium = c( "X1", "X2", "X3", "X4", "X5"),
+      large = c( "X1", "X2", "X3", "X4", "X5", "X6", "X7", "X8", "X9" ) # TODO:: Why adding more covariates as in , "X6", "X7", "X8", "X9" ) raises Error in X[1:N, ] : subscript out of bounds
+    ),
+    treatment = MND_treatment,
+    special_covariates = c( "spec_covariate" )
+  ),
+  
+  ca = list(
+    outcomes = ca_outcomes,
+    covariates = list(
+      small = c(  
+        "ETHNIC",          # Ethnicity; Value Labels: 1 - Hispanic, 2 - Black, 3 - White, 4 - Asian/Native American
+        "READCAT",         # 8TH GR. READ TESTS SCORE (%ILE CAT)
+        "AGE",             # AGE
+        "ATRATCP1",        # ATTENDANCE RATE - YEAR OF RA
+        "MATHCAT",         # 8TH GR. MATH TESTS SCORE (%ILE CAT)
+        "FEMALE"#,           # FEMALE
+        # Temporally excluded as it is highly correlated with the vars it is derived from.
+        #"DROPPRB",         # PRED PROB DROPOUT FRM BASELINE VARS
+        #"DROPPRB_m",     # Missing value flag
+        #"ATRATCP1_m"#,    # Missing value flag
+        #"AGE_m"         # Missing value flag
+      ),
+      medium = c( 
+        "ETHNIC",          # Ethnicity; Value Labels: 1 - Hispanic, 2 - Black, 3 - White, 4 - Asian/Native American
+        "READCAT",         # 8TH GR. READ TESTS SCORE (%ILE CAT)
+        "AGE",             # AGE
+        "ATRATCP1",        # ATTENDANCE RATE - YEAR OF RA
+        "MATHCAT",         # 8TH GR. MATH TESTS SCORE (%ILE CAT)
+        "FEMALE",          # FEMALE
+        # Temporally excluded as it is highly correlated with the vars it is derived from.
+        # "DROPPRB",         # PRED PROB DROPOUT FRM BASELINE VARS
+        # "DROPPRB_m",     # Missing value flag
+        # "ATRATCP1_m",    # Missing value flag
+        # "AGE_m",         # Missing value flag
+        "SIBDROP",         # HAS SIBLING HS DROP OUT
+        "CREDYRP1",        # CREDITS EARNED (COMP): RA YEAR
+        "GPAYRP1",         # GPA (CONT): RA YEAR
+        "OVERAGE",         # STUDENT IS OVERAGE FOR GRADE LEVEL
+        "PARENT",          # WHO STUDENT LIVES WITH K3
+        "SCHLTRAN",        # TRANSFERRED SCHOOLS 2+ TIMES
+        "LEP",             # STUDENT LIMITED ENGLISH PROFICIENT
+        "WELFFS"           # FAMILY HAS RECEIVED WELFARE OR FS
+        # "CREDYRP1_m",    # Missing value flag
+        # "GPAYRP1_m",     # Missing value flag
+      ),
+      large = ca_covariates 
+    ),
+    treatment = ca_treatment,
+    special_covariates = ca_special_covariates #TODO:: Delete?
+  ),
+  
+  asap = list(
+    outcomes = asap_outcomes,
+    covariates = list(
+      small = c(  
+        "BLAGENUM",  # Age
+        "BLFEMALE",  # Gender (Female dummy)
+        "BLRAET1"   # Race/ethnicity
+      ),
+      medium = c( 
+        "BLCHLD",  # Has children
+        "BLLIV",   # Marital status and living situation
+        "BLWORK",  # Currently employed
+        "BLP50",   # Parents pay more than 50% of educational expenses
+        "BLC1ST",  # First in immediate family to attend college
+        "BLDEGS_HSDP"  #Diplomas and degrees earned
+      ),
+      large = asap_covariates 
+    ),
+    treatment = asap_treatment,
+    special_covariates = asap_special_covariates #TODO:: Delete?
+  )
+)
+
+
+###################################################################################
+# STEP 2: DEFINE THE SIMULATION LAUNCHER FUCTION
+###################################################################################
+
+
+#' perform_simulation_launcher:: The function to launch the simulation
+#' 
+#' @param S Number of simulation runs
+#' @param dataset Dataset acronym from the lookup_table
+#' @param realdata Real dataset
+#' @param cov_set_size Covariate set size. Default to small.
+#' @param size_train Number of rows in train data. Default to 2000.
+#' @param size_test Number of rows in test data. Default to 10000.
+#' @param p_tx Proportion treated. If NULL will use proportion treated of passed data.
+#' @param special_covariates Add any additional covariate (for example, a site/cohort interaction) to all covariate sets
+#' @param include_RF Include RF models
+#' @param include_Lasso Include Lasso models
+#' @param include_Xbart Include XBART 
+#' @param include_CDML Include CDML
+#' 
+#' @return outputs RMSPE, Bias, and SD matrix. 510,000 rows by 20 columns (30,000 * 17), encompassing data from all queens
+#' 
+#' @export
+
+perform_simulation_launcher = function( S = 3, # Number of iterations in the simulation
+                                        dataset, # Dataset acronym from the lookup_table
+                                        realdata, # Real dataset 
+                                        cov_set_size = "small", # Covariate set size. Default to small.
+                                        outcome_index = 1, # Order of outcome in the outcome list. Default to first.
+                                        size_train = 2000, # Number of rows in train data. Default to 2000.
+                                        size_test = 10000, # Number of rows in test data. Default to 10000.
+                                        p_tx = NULL, # Proportion treated. If NULL will use proportion treated of passed data.
+                                        special_covariates = NULL, # Add any additional covariate (for example, a site/cohort interaction) to all covariate sets
+                                        include_RF = TRUE, # Include RF models
+                                        include_Lasso = TRUE, # Include Lasso models
+                                        include_Xbart = TRUE, # Include Xbart model
+                                        include_CDML = TRUE,
+                                        ... ) { 
+  
+  # Assign proper variable names for covariates based on the dataset chosen 
+  covariates_sets = lookup_table[[dataset]]$covariates
+  core_covariates = covariates_sets[[cov_set_size]]
+  
+  # Assign proper variable names for outcomes based on the dataset chosen   
+  outcomes = lookup_table[[dataset]]$outcomes
+  outcome = outcomes[outcome_index]
+  
+  # Assign proper variable name for treatment based on the dataset chosen 
+  treatment = lookup_table[[dataset]]$treatment
+  
+  # Add special covaraites if any to the list of covariates
+  covariates = core_covariates
+  if ( !is.null( special_covariates ) ) {
+    covariates = c( covariates, special_covariates )
+  }
+  
+  # Covariate set for Y1 is always small
+  covariates_sets_Y1 = lookup_table[[dataset]]$covariates
+  core_covariates_Y1 = covariates_sets_Y1[[cov_set_size]]
+  
+  # Set which model we are testing
+  models = c( "ATE", "OLS" )
+  
+  if ( include_RF ) {
+    models = c( models, "RF Inf", "RF CMR", "RF MOM IPW", "RF MOM DR", "CF", "CF LC" )
+  }
+  
+  if ( include_CDML ) {
+    models = c( models, "CDML" )
+  }
+  
+  if ( include_Lasso ) {
+    models = c(
+      models,
+      "Lasso Inf", "Lasso CMR", "Lasso MOM IPW", "Lasso MOM DR",
+      "Lasso MCM", "Lasso MCM EA", "Lasso RL"
+    )
+  }
+  
+  if ( include_Xbart ) {
+    models = c( models, "XBART" )
+  }
+  
+  
+  # Create an empty list to store the result dataframes
+  result_list <- list()
+  
+  # For Analog
+  for ( queen in models ) {
+  # For Parallel:
+  #result_list = foreach(queen = models ) %dopar% {
+    
+    print( queen ) # Let us know on which queen we are on now
+    
+    # Check if queen is "RF Inf" or "Lasso Inf"
+    if (queen == "RF Inf" || queen == "Lasso Inf") {
+      # next  # Skip this iteration in Analog
+      return(NULL)  # Skip iteration in Parallel
+    }
+    
+    # Load baseline data (now it is basically our test set)
+    baseline_object = load_baseline_data_from_disk( dataset )
+    baseline_seed_synthpop = baseline_object$seed_synthpop # Seed used to create covariates
+    baseline_Y0_seed = baseline_object$Y0_seed # Seed used to create outcomes
+    baseline_data = baseline_object$Data # Data consisting of covariates and Y0
+    
+    # Make sure there are no missing in outcome
+    realdata <- realdata[ !is.na( realdata[[outcome]] ), ]
+    
+    tau_name = paste( outcome, "_tau", sep = "" )
+    
+    # Add treatment affects (tau and Y1) and treatment assignment to the baseline data
+    baseline_full = add_treatment_effects ( seed = baseline_Y0_seed, # The same seed used to produce Y0 in this data
+                                            covariate_set = core_covariates_Y1, # Small covariate set
+                                            baseline = baseline_data, # Data to which we want to add Y1 and IATE
+                                            outcome = outcome, # Outcome name
+                                            treatment = treatment, # Treatment assignment variable name
+                                            realdata = realdata, # Real dataset
+                                            queen = queen, # Current queen
+                                            p_tx = p_tx # Proportion treated
+    )
+    
+    results = baseline_full
+    results$queen = queen
+    
+    # Append the result dataframe to the list for Analog
+    result_list[[queen]] <- results
+    
+    
+    #For Parallel
+    #results
+    
+  }
+  
+  #Stack all dataframes vertically
+  stacked_result <- do.call(rbind, result_list)
+  return( stacked_result )
+  
+}
+
+
+```
+
+```{r}
+test = perform_simulation_launcher(S = 2, dataset = "mnd", realdata = MND_subset_real, cov_set_size = "small", outcome_index = 2, include_RF = FALSE, include_Lasso = FALSE, include_Xbart = FALSE, include_CDML = FALSE)
+```
+```{r}
+test555 = perform_simulation_launcher(S = 2, dataset = "mnd", realdata = MND_subset_real, cov_set_size = "small", outcome_index = 1, include_RF = FALSE, include_Lasso = FALSE, include_Xbart = FALSE, include_CDML = FALSE)
+
+```
+```{r}
+test555 <- test555 %>%
+  filter(queen != "ATE")
+```
+
+```{r}
+summary(test555$Y_continuous_tau)
+```
+```{r}
+summary(test555$Y_continuous_Y1)
+```
+
+```{r}
+lin_reg_estimator = function( y_tr, d_tr, x_tr, x_val, sd_Y0   ) {
+  
+  print(sd_Y0) 
+  ATE = mean( y_tr[d_tr==1] ) - mean( y_tr[d_tr==0] )
+  print(ATE)
+  
+  # Create a data frame for the training data.
+  dat = data.frame( x_tr )
+  
+  dat['P'] = d_tr
+  dat['outcome'] = y_tr
+  
+  # Extract column names for covariates.
+  xvars = colnames(x_tr)
+  
+  # Fit a linear regression model.
+  fm <- f('outcome', xvars )
+  mod <- lm(fm, data = dat)
+  
+  # Create a data frame for the validation data.
+  valdat = data.frame(x_val)
+  valdat['P'] = 1
+  
+  # Use the trained model to predict IATE on the validation set.
+  d0 = valdat
+  d1 = d0
+  d0$P = 0
+  d1$P = 1
+  Yhat1 = predict(mod, newdata=d1)
+  Yhat0 = predict(mod, newdata=d0)
+  predictions = as.vector(Yhat1 - Yhat0)
+  
+  predictions[ (predictions-ATE) > sd_Y0 ] = ATE + sd_Y0
+  predictions[ (predictions-ATE) < -sd_Y0 ] = ATE - sd_Y0
+
+  # Return the estimated IATE for the validation set.
+  return(predictions)
+}
+
+```
+
+```{r eval=FALSE, include=FALSE}
+sd0 = sd( Y0 )
+ATE = mean( Yobs[Z==1] ) - mean( Yobs[Z==0] )
+ 
+taus[ (taus-ATE) > sd0 ] = ATE + sd0
+taus[ (taus-ATE) < -sd0 ] = ATE - sd0
+
+```
+
+

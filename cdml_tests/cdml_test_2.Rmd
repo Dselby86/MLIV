@@ -1,0 +1,529 @@
+---
+title: "What is going on with CDML for some queens"
+subtitle: "MLIV"
+author: "Polina Polskaia"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    df_print: paged
+    fig_caption: yes
+    fig_height: 8
+    fig_width: 10
+    highlight: pygments
+    theme: spacelab
+    toc: yes
+    toc_depth: 6
+    toc_float: yes
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r include=FALSE}
+# In order for all program paths to load we need to use here::here
+library( here )
+
+# Load previous programs
+source( here::here( "simulation_v2/05_MLIV_add_treatment_effects.R" ) )
+```
+
+
+```{r include=FALSE}
+# Turn off scientific notation
+options( scipen = 999 )
+```
+
+
+```{r include=FALSE}
+baseline_object = get( load( "/data/share/cdi/MLIV/Data/DGP_Baseline/ca_baseline_object.RData" ) )
+```
+
+
+```{r include=FALSE}
+baseline_seed_synthpop = baseline_object$seed_synthpop # Seed used to create covariates
+baseline_Y0_seed = baseline_object$Y0_seed # Seed used to create outcomes
+baseline_data = baseline_object$Data # Data consisting of covariates and Y0
+```
+
+
+```{r include=FALSE}
+# Make sure there are no missing in outcome
+realdata <- ca_subset_imputed[ !is.na( ca_subset_imputed[["Y18JBERNA_06"]] ), ]   
+
+# Add treatment affects (tau and Y1) and treatment assignment to the baseline data
+baseline_full_rf_mom_dr = add_treatment_effects ( seed = baseline_Y0_seed, # The same seed used to produce Y0 in this data
+                                        covariate_set = c( "ETHNIC", "READCAT", "AGE", "ATRATCP1", "MATHCAT", "FEMALE"),
+                                        baseline = baseline_data, # Data to which we want to add Y1 and IATE
+                                        outcome = "Y18JBERNA_06", # Outcome name
+                                        treatment = ca_treatment, # Treatment assignment variable name
+                                        realdata = realdata, # Real dataset
+                                        queen = "RF MOM DR", # Current queen
+                                        p_tx = NULL # Proportion treated
+                                      )
+```
+
+
+```{r include=FALSE}
+# Create a new data frame 'test_set' with the first 10,000 rows
+test_set_rf_mom_dr = baseline_full_rf_mom_dr[1:10000, ]
+```
+
+
+```{r include=FALSE}
+# Add treatment affects (tau and Y1) and treatment assignment to the baseline data
+baseline_full_lasso_mcm_ea = add_treatment_effects ( seed = baseline_Y0_seed, # The same seed used to produce Y0 in this data
+                                        covariate_set = c( "ETHNIC", "READCAT", "AGE", "ATRATCP1", "MATHCAT", "FEMALE"),
+                                        baseline = baseline_data, # Data to which we want to add Y1 and IATE
+                                        outcome = "Y18JBERNA_06", # Outcome name
+                                        treatment = ca_treatment, # Treatment assignment variable name
+                                        realdata = realdata, # Real dataset
+                                        queen = "Lasso MCM EA", # Current queen
+                                        p_tx = NULL # Proportion treated
+                                      )
+```
+
+
+```{r include=FALSE}
+# Create a new data frame 'test_set' with the first 10,000 rows
+test_set_lasso_mcm_ea = baseline_full_lasso_mcm_ea[1:10000, ]
+```
+
+# Dependent variable {.tabset}
+
+Let's look at the dependent variable `Y18JBERNA_06`:
+
+## In real data:
+
+```{r echo=FALSE}
+summary( ca_subset_imputed$Y18JBERNA_06 )
+```
+```{r echo=FALSE}
+# Create the histogram with color by TREATMNT, binwidth 500, custom fill color, and minimal theme
+p = ggplot(ca_subset_imputed, aes(x = Y18JBERNA_06, fill = factor(TREATMNT))) +
+    geom_histogram(position = "identity", binwidth = 500, alpha = 0.7, color = "#e9ecef") +
+    labs(title = "Histogram of Y18JBERNA_06 by TREATMNT",
+         x = "Y18JBERNA_06",
+         y = "Count") +  # Change y-axis label to "Count"
+    scale_fill_manual(values = c("yellow", "blueviolet"),
+                      name = "TREATMNT",
+                      labels = c("Value1", "Value2")) +
+    theme_minimal()
+
+# Convert ggplot object to plotly object
+ggplotly(p)
+```
+
+## In the test set data generated using RF MOM DR:
+
+```{r echo=FALSE}
+summary( test_set_rf_mom_dr$Y18JBERNA_06 )
+```
+> NOTE: See the negative values for earnings! Not a huge problem but still worth noticing.
+
+```{r echo=FALSE}
+# Create the histogram with color by TREATMNT, binwidth 500, custom fill color, and minimal theme
+p = ggplot(test_set_rf_mom_dr, aes(x = Y18JBERNA_06, fill = factor(TREATMNT))) +
+    geom_histogram(position = "identity", binwidth = 500, alpha = 0.7, color = "#e9ecef") +
+    labs(title = "Histogram of Y18JBERNA_06 by TREATMNT",
+         x = "Y18JBERNA_06",
+         y = "Count") +  # Change y-axis label to "Count"
+    scale_fill_manual(values = c("yellow", "blueviolet"),
+                      name = "TREATMNT",
+                      labels = c("Value1", "Value2")) +
+    theme_minimal()
+
+# Convert ggplot object to plotly object
+ggplotly(p)
+```
+
+> NOTE: Count is higher because test set has 10000 obs and real data only has 1254
+
+
+## In the test set data generated using Lasso MCM EA:
+
+```{r echo=FALSE}
+summary( test_set_lasso_mcm_ea$Y18JBERNA_06 )
+```
+> NOTE: See the negative values for earnings! Not a huge problem but still worth noticing.
+
+```{r echo=FALSE}
+# Create the histogram with color by TREATMNT, binwidth 500, custom fill color, and minimal theme
+p = ggplot(test_set_lasso_mcm_ea, aes(x = Y18JBERNA_06, fill = factor(TREATMNT))) +
+    geom_histogram(position = "identity", binwidth = 500, alpha = 0.7, color = "#e9ecef") +
+    labs(title = "Histogram of Y18JBERNA_06 by TREATMNT",
+         x = "Y18JBERNA_06",
+         y = "Count") +  # Change y-axis label to "Count"
+    scale_fill_manual(values = c("yellow", "blueviolet"),
+                      name = "TREATMNT",
+                      labels = c("Value1", "Value2")) +
+    theme_minimal()
+
+# Convert ggplot object to plotly object
+ggplotly(p)
+```
+
+> NOTE: Count is higher because test set has 10000 obs and real data only has 1254
+
+
+# Tau of dependant variable {.tabset}
+
+So, we do not see anything particularly bad happening when we generate the dependent variable using queens that are failing CDML except negative values. But negative values are easily explained as we do `Y1 = Y0 + tau` so if `tau` is larger than Y0 AND/OR Y0 equals 0 it will produce those negative values.
+
+So, let's look at the tau for this variable to see maybe something is going on there.
+
+## In the test set data generated using RF MOM DR:
+
+```{r echo=FALSE}
+summary( test_set_rf_mom_dr$Y18JBERNA_06_tau )
+```
+
+
+```{r echo=FALSE}
+# Create the histogram with color by TREATMNT, binwidth 500, custom fill color, and minimal theme
+p = ggplot(test_set_rf_mom_dr, aes(x = Y18JBERNA_06_tau, fill = factor(TREATMNT))) +
+    geom_histogram(position = "identity", binwidth = 100, alpha = 0.7, color = "#e9ecef") +
+    labs(title = "Histogram of Y18JBERNA_06_tau by TREATMNT",
+         x = "Y18JBERNA_06_tau",
+         y = "Count") +  # Change y-axis label to "Count"
+    scale_fill_manual(values = c("yellow", "blueviolet"),
+                      name = "TREATMNT",
+                      labels = c("Value1", "Value2")) +
+    theme_minimal()
+
+# Convert ggplot object to plotly object
+ggplotly(p)
+```
+
+
+## In the test set data generated using Lasso MCM EA:
+
+```{r echo=FALSE}
+summary( test_set_lasso_mcm_ea$Y18JBERNA_06_tau )
+```
+
+```{r echo=FALSE}
+# Create the histogram with color by TREATMNT, binwidth 500, custom fill color, and minimal theme
+p = ggplot(test_set_lasso_mcm_ea, aes(x = Y18JBERNA_06_tau, fill = factor(TREATMNT))) +
+    geom_histogram(position = "identity", binwidth = 100, alpha = 0.7, color = "#e9ecef") +
+    labs(title = "Histogram of Y18JBERNA_06_tau by TREATMNT",
+         x = "Y18JBERNA_06_tau",
+         y = "Count") +  # Change y-axis label to "Count"
+    scale_fill_manual(values = c("yellow", "blueviolet"),
+                      name = "TREATMNT",
+                      labels = c("Value1", "Value2")) +
+    theme_minimal()
+
+# Convert ggplot object to plotly object
+ggplotly(p)
+```
+> NOTE: Not perfect, but not that bad either? 
+
+# So what is wrong?
+
+First let's see how our CDML performs by queen when aggregated using `sqrt(mean(value^2))` and make sure the numbers are the same as we saw before:
+
+
+```{r include=FALSE}
+load("/data/share/cdi/MLIV/Data/Simulated/Sim_Run_2024-01-08_ca/ca_50_1_CDML.RData")
+```
+
+```{r include=FALSE}
+df = ca_50_1_CDML
+```
+
+```{r include=FALSE}
+cdml = df %>%
+  select(metric, id, CDML, queen)
+```
+
+```{r include=FALSE}
+cdml_wo_runtime = cdml %>%
+  filter(metric != "runtime")
+```
+
+```{r include=FALSE}
+source( here::here( "simulation_v2/08_MLIV_simulation_launcher.R" ) )
+```
+
+```{r include=FALSE}
+# Aggregate performance by queen
+agg_perf_by_queen_df_without_runtime  = aggregate_metrics_by_queen( cdml_wo_runtime )
+```
+
+
+```{r echo=FALSE}
+# agg_perf_by_queen_df_without_runtime$model = factor( agg_perf_by_queen_df_without_runtime$model, levels = ALL_MODELS )
+# agg_perf_by_queen_df_without_runtime$queen = factor( agg_perf_by_queen_df_without_runtime$queen, levels = ALL_MODELS )
+
+# Create the plot with custom size
+gg <- ggplot( agg_perf_by_queen_df_without_runtime, aes( model, Ev, fill = queen ) ) +
+  facet_wrap( ~metric ) +
+  geom_bar( stat = "identity", position = position_dodge2( reverse = TRUE ) , width = 0.7 )  +
+  coord_flip() +
+  theme_minimal() +
+  scale_x_discrete( limits = rev( levels( agg_perf_by_queen_df_without_runtime$model ) ) ) +  # Reverse the order
+  theme(
+    plot.title = element_text(hjust = 0.5),  # Center the title
+    axis.title.y = element_blank(),  # Remove the y-axis title
+    axis.text.y = element_text(size = 8),  # Adjust y-axis text size
+    strip.text = element_text(size = 8),  # Adjust facet labels size
+    plot.background = element_blank(),  # Remove plot background
+    plot.margin = unit(c(5, 5, 5, 5), "pt")  # Adjust margins
+  ) +
+  labs(title = "Aggregated performance by queen - sqrt(mean(value^2))",
+       fill = "Queen")
+
+# Convert ggplot to plotly
+interactive_plot <- ggplotly(gg)
+
+# Display the interactive plot
+interactive_plot
+```
+Yes, the numbers are the same as expected, check passed.
+
+Those are aggregated numbers, let's go back to our simulation data by observation in test set (10000 obs) and see how RMSE behaves when test set was created using RF MOM DR queen:
+
+```{r include=FALSE}
+# Filter the dataframe to include only rows where metric is "rmse"
+cdml_rmse <- cdml %>%
+  filter(metric == "rmse")
+
+cdml_rmse_queen <- cdml_rmse %>%
+  filter(queen == "RF MOM DR")
+```
+
+So here is our RMSE for all 10000 test observations created using RF MOM DR queen:
+
+```{r echo=FALSE}
+summary(cdml_rmse_queen$CDML)
+```
+Obviously we see that 107722.64 is a huge outlier.
+
+Let's look at the distribution too:
+
+```{r echo=FALSE}
+p = ggplot(cdml_rmse_queen, aes(x = CDML)) +
+    geom_histogram(position = "identity", binwidth = 1, alpha = 0.7, color = "blueviolet") +
+    labs(title = "Histogram of RMSE when queen is RF MOM DR",
+         x = "RMSE",
+         y = "Count") +  # Change y-axis label to "Count"
+
+    theme_minimal()
+
+# Convert ggplot object to plotly object
+ggplotly(p)
+```
+
+Let's look at a table of when RMSE is > 1000:
+
+```{r include=FALSE}
+table <- cdml_rmse_queen %>%
+  filter(CDML > 1000)
+```
+```{r echo=FALSE}
+arranged_table <- arrange(table, desc(CDML))
+
+arranged_table
+```
+
+What happened with observation 5763 in the test set? Why CDML has 107722.644 for its RMSE?
+
+Let's look at the data for this observation in the test set:
+
+```{r echo=FALSE}
+row_5763 <- test_set_rf_mom_dr[5763, ]
+
+row_5763
+```
+
+Yes, earnings for this row are higher than average, but nothing seems to be very wrong with this row. Why did CDML fail to predict tau for it correctly? To find out we need data by simulation, and I do not have it yet. So in that particular observation in the test set, somewhere in those 50 simulations, CDML failed by so much one or multiple times that RMSE across this 50 simulation is an outlier.
+
+> But more importantly, how do we protect ourselves from these outliers?
+
+Does the same observation in the test set causes troubles when Lasso MCM EA is a queen?
+
+
+```{r include=FALSE}
+# Filter the dataframe to include only rows where metric is "rmse"
+cdml_rmse <- cdml %>%
+  filter(metric == "rmse")
+
+cdml_rmse_queen <- cdml_rmse %>%
+  filter(queen == "Lasso MCM EA")
+```
+
+So here is our RMSE for all 10000 test observations created using Lasso MCM EA queen:
+
+```{r echo=FALSE}
+summary(cdml_rmse_queen$CDML)
+```
+Again, 140376.65 is a huge outlier.
+
+Let's look at the distribution too:
+
+```{r echo=FALSE}
+p = ggplot(cdml_rmse_queen, aes(x = CDML)) +
+    geom_histogram(position = "identity", binwidth = 1, alpha = 0.7, color = "blueviolet") +
+    labs(title = "Histogram of RMSE when queen is Lasso MCM EA",
+         x = "RMSE",
+         y = "Count") +  # Change y-axis label to "Count"
+
+    theme_minimal()
+
+# Convert ggplot object to plotly object
+ggplotly(p)
+```
+
+
+
+Let's look at a table of when RMSE is > 1000:
+
+```{r include=FALSE}
+table <- cdml_rmse_queen %>%
+  filter(CDML > 1000)
+```
+```{r echo=FALSE}
+arranged_table <- arrange(table, desc(CDML))
+
+arranged_table
+```
+> No, now it is a different observation in the test set that is causing trobles - 7543.
+
+What happened with observation 7543 in the test set? Why CDML has 140376.65 for its RMSE?
+
+Let's look at the data for this observation in the test set:
+
+```{r echo=FALSE}
+row_7543 <- test_set_rf_mom_dr[7543, ]
+
+row_7543
+```
+
+Again nothing seems to be wrong with it. 
+
+# Coclusion
+
+So in both cases CDML aggregated stats are skewed by ONE bad prediction. We could go further, disagregate by simulation run for that particular observation in the test set, see which simulation runs produce the outliers. What we will probably find is that for some simulation, train set is a bad draw and model underfits.
+
+But what could we do with these outliers overall? Like there always be a chance of a bad train set. Should we remove the outliers?
+Like what will happen it I remove these two bad rows from our disagregated results data and than aggregate again (so aggregate for 9998 observations instead of 10000)?
+
+
+
+```{r include=FALSE}
+cdml_wo_runtime = cdml %>%
+  filter(metric != "runtime")
+```
+
+```{r include=FALSE}
+cdml_wo_runtime = cdml_wo_runtime %>%
+  filter(id != "7543")
+```
+
+```{r include=FALSE}
+cdml_wo_runtime = cdml_wo_runtime %>%
+  filter(id != "5763")
+```
+
+```{r include=FALSE}
+# Aggregate performance by queen
+agg_perf_by_queen_df_without_runtime  = aggregate_metrics_by_queen( cdml_wo_runtime )
+```
+
+
+```{r echo=FALSE}
+# agg_perf_by_queen_df_without_runtime$model = factor( agg_perf_by_queen_df_without_runtime$model, levels = ALL_MODELS )
+# agg_perf_by_queen_df_without_runtime$queen = factor( agg_perf_by_queen_df_without_runtime$queen, levels = ALL_MODELS )
+
+# Create the plot with custom size
+gg <- ggplot( agg_perf_by_queen_df_without_runtime, aes( model, Ev, fill = queen ) ) +
+  facet_wrap( ~metric ) +
+  geom_bar( stat = "identity", position = position_dodge2( reverse = TRUE ) , width = 0.7 )  +
+  coord_flip() +
+  theme_minimal() +
+  scale_x_discrete( limits = rev( levels( agg_perf_by_queen_df_without_runtime$model ) ) ) +  # Reverse the order
+  theme(
+    plot.title = element_text(hjust = 0.5),  # Center the title
+    axis.title.y = element_blank(),  # Remove the y-axis title
+    axis.text.y = element_text(size = 8),  # Adjust y-axis text size
+    strip.text = element_text(size = 8),  # Adjust facet labels size
+    plot.background = element_blank(),  # Remove plot background
+    plot.margin = unit(c(5, 5, 5, 5), "pt")  # Adjust margins
+  ) +
+  labs(title = "Aggregated performance by queen - sqrt(mean(value^2))",
+       fill = "Queen")
+
+# Convert ggplot to plotly
+interactive_plot <- ggplotly(gg)
+
+# Display the interactive plot
+interactive_plot
+```
+I removed two bad rows, aggregated again using sqrt(mean(value^2)) and CDML is back to normal!
+
+
+
+
+```{r include=FALSE}
+df_wo_runtime = df %>%
+  filter(metric != "runtime")
+```
+
+```{r include=FALSE}
+df_wo_runtime = df_wo_runtime %>%
+  filter(id != "7543")
+```
+
+```{r include=FALSE}
+df_wo_runtime = df_wo_runtime %>%
+  filter(id != "5763")
+```
+
+```{r include=FALSE}
+# Aggregate performance by queen
+agg_perf_by_queen_df_without_runtime  = aggregate_metrics_by_queen( df_wo_runtime )
+```
+
+
+```{r echo=FALSE}
+ agg_perf_by_queen_df_without_runtime$model = factor( agg_perf_by_queen_df_without_runtime$model, levels = ALL_MODELS )
+ agg_perf_by_queen_df_without_runtime$queen = factor( agg_perf_by_queen_df_without_runtime$queen, levels = ALL_MODELS )
+
+# Create the plot with custom size
+gg <- ggplot( agg_perf_by_queen_df_without_runtime, aes( model, Ev, fill = queen ) ) +
+  facet_wrap( ~metric ) +
+  geom_bar( stat = "identity", position = position_dodge2( reverse = TRUE ) , width = 0.7 )  +
+  coord_flip() +
+  theme_minimal() +
+  scale_x_discrete( limits = rev( levels( agg_perf_by_queen_df_without_runtime$model ) ) ) +  # Reverse the order
+  theme(
+    plot.title = element_text(hjust = 0.5),  # Center the title
+    axis.title.y = element_blank(),  # Remove the y-axis title
+    axis.text.y = element_text(size = 8),  # Adjust y-axis text size
+    strip.text = element_text(size = 8),  # Adjust facet labels size
+    plot.background = element_blank(),  # Remove plot background
+    plot.margin = unit(c(5, 5, 5, 5), "pt")  # Adjust margins
+  ) +
+  labs(title = "Aggregated performance by queen - sqrt(mean(value^2))",
+       fill = "Queen")
+
+# Convert ggplot to plotly
+interactive_plot <- ggplotly(gg)
+
+# Display the interactive plot
+interactive_plot
+```
+
+Yes, it is still not the best model among others, it is actually still the worst. But it is not such a huge outlier anymore. 
+
+Overall, it seems like CDML sometimes produces very very bad results and when we aggregate those bad results, it looks like it is performing very bad in general.
+
+Should we continue investigate by simulation run? Get rid of outliers? 
+
+
