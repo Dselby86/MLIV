@@ -1,0 +1,111 @@
+---
+title: "Testing XGBOOST in raw MLIV results"
+author: "Polina Polskaia"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  pdf_document:
+    toc: yes
+    toc_depth: '6'
+  html_document:
+    df_print: paged
+    fig_caption: yes
+    fig_height: 8
+    fig_width: 10
+    highlight: pygments
+    theme: spacelab
+    toc: yes
+    toc_depth: 6
+    toc_float: yes
+editor_options:
+  markdown:
+    wrap: 72
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Setup 
+
+Taking ATE queen as we saw a problem specifically with that queen.
+
+This is CA, continious, small set, ATE queen, 1000 train set.
+
+```{r}
+`ATE_queen_predicted_IATEs` <- readRDS("/data/share/cdi/MLIV/Data/Big Jobs/ca/continuous/train_1000/small_cov_set/combined_IATEs_by_queen/simulation_from_080524/ATE_queen_predicted_IATEs.rds")
+
+df = `ATE_queen_predicted_IATEs`[["predictedtau"]]
+```
+
+Separating each model into a dataframe.
+
+```{r}
+third_dim_names <- dimnames(df)[[3]]
+
+# Initialize an empty list to store all data frames
+model_dataframes <- list()
+
+# Loop through each model name in the third dimension and create a data frame
+for (model in third_dim_names) {
+  # Extract the slice for each model and convert it into a data frame
+  model_dataframes[[model]] <- as.data.frame(df[ , , which(third_dim_names == model)])
+}
+
+# Accessing each model's data frame
+df_ATE <- model_dataframes[["ATE"]]
+df_OLS_S <- model_dataframes[["OLS S"]]
+df_RF_INF <- model_dataframes[["RF INF"]]
+df_RF_T <- model_dataframes[["RF T"]]
+df_RF_MOM_IPW <- model_dataframes[["RF MOM IPW"]]
+df_RF_MOM_DR <- model_dataframes[["RF MOM DR"]]
+df_CF <- model_dataframes[["CF"]]
+df_CF_LC <- model_dataframes[["CF LC"]]
+df_CDML <- model_dataframes[["CDML"]]
+df_LASSO_INF <- model_dataframes[["LASSO INF"]]
+df_LASSO_T <- model_dataframes[["LASSO T"]]
+df_LASSO_MOM_IPW <- model_dataframes[["LASSO MOM IPW"]]
+df_LASSO_MOM_DR <- model_dataframes[["LASSO MOM DR"]]
+df_LASSO_MCM <- model_dataframes[["LASSO MCM"]]
+df_LASSO_MCM_EA <- model_dataframes[["LASSO MCM EA"]]
+df_LASSO_R <- model_dataframes[["LASSO R"]]
+df_XGBOOST_S <- model_dataframes[["XGBOOST S"]]
+df_XGBOOST_R <- model_dataframes[["XGBOOST R"]]
+df_BART_T <- model_dataframes[["BART T"]]
+df_BART_S <- model_dataframes[["BART S"]]
+
+
+
+```
+
+# Predicted Tau for each Obs (averaged across 100 runs)
+
+We have 10000 obs and for each 100 runs. Let's plot 10000 obs averaging across runs.
+
+```{r}
+# Loop through each model in the list and plot the average predictions
+for (model in names(model_dataframes)) {
+  
+  # Get the data frame for the current model
+  df_model <- model_dataframes[[model]]
+  
+  # Calculate the average of the 100 simulation runs for each observation (column)
+  average_predictions <- colMeans(df_model)
+  
+  # Plot the 10,000 observations
+  plot(
+    average_predictions, 
+    type = "p", 
+    pch = 20, 
+    col = "blue",
+    main = paste("Average Predictions for", model, "Across 100 Simulation Runs"),
+    xlab = "Observation",
+    ylab = "Average Prediction"
+  )
+  
+  # Optionally, add a grid to make it easier to identify points
+  grid()
+}
+```
+
+> XGBOOSTs are low? They are predicting 0s and up to 80 while OLS 100 to 200? ATE and INF are at 140 which makes sense. Some lassos are interesting too, they have two distinct lines.
